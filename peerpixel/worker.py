@@ -152,6 +152,7 @@ def run(renderer, once: bool = False) -> int:
                             publish(phase="online", connected=True, prompt="", step=0, steps=0,
                                     elapsedSeconds=0, images=status.images,
                                     earnedPixels=earned_pixels, pixelsPerHour=rate,
+                                    lastEarnedPixels=earned,
                                     lastImageAt=int(time.time() * 1000))
                             display.event(
                                 f"done in {time.time() - started:.1f}s  +{earned:g} pixels"

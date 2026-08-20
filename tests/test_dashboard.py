@@ -1,6 +1,6 @@
 import unittest
 
-from peerpixel.dashboard import DashboardApp, request_allowed
+from peerpixel.dashboard import DashboardApp, PAGE, request_allowed
 
 
 class DashboardTests(unittest.TestCase):
@@ -53,6 +53,10 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(calls, [True])
         self.assertTrue(payload["allowFree"])
+
+    def test_progress_is_above_both_views_and_rendering_opens_running(self):
+        self.assertLess(PAGE.index('id="progressPanel"'), PAGE.index('id="setupView"'))
+        self.assertIn("if(s.phase==='rendering')tab('run')", PAGE)
 
 
 if __name__ == "__main__":
