@@ -84,6 +84,20 @@ class Renderer:
         self.pipe = pipe
         print(f"ready in {time.time() - started:.0f}s", flush=True)
 
+    def unload(self):
+        """Release the loaded pipeline after a very long idle spell."""
+        if self.pipe is None:
+            return
+        self.pipe = None
+        try:
+            import torch
+            if self._device == "cuda":
+                torch.cuda.empty_cache()
+            elif self._device == "mps":
+                torch.mps.empty_cache()
+        except Exception:  # noqa: BLE001 - cleanup is best effort
+            pass
+
     def render(self, job: dict, on_step=None) -> bytes:
         import torch
         from PIL import Image

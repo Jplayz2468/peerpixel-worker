@@ -46,6 +46,14 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(calls, ["download"])
 
+    def test_free_toggle_updates_this_device(self):
+        calls = []
+        app = DashboardApp(state=lambda: {"allowFree": True}, set_free=lambda allow: calls.append(allow))
+        status, payload = app.handle("POST", "/api/free", {"allowFree": True})
+        self.assertEqual(status, 200)
+        self.assertEqual(calls, [True])
+        self.assertTrue(payload["allowFree"])
+
 
 if __name__ == "__main__":
     unittest.main()

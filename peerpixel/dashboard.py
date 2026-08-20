@@ -15,6 +15,12 @@ from urllib.parse import parse_qs, urlsplit
 from . import api, config, dashboard_state, download
 
 
+def set_free_machine(allow):
+    settings = config.read()
+    api.set_free(settings.get("deviceId"), bool(allow))
+    config.write(allowFree=bool(allow), allowFreeSyncedAt=int(__import__("time").time()))
+
+
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PeerPixel Worker</title><style>
@@ -31,15 +37,16 @@ PAGE = r"""<!doctype html>
 </div>
 <div id="runView" class="view"><div class="hero"><section class="card"><div class="status"><span class="dot" id="dot"></span><b id="state">Checking…</b></div><div class="big" id="phase">Stopped</div><p id="prompt">Start the worker, then you can leave this page open or close it.</p><div class="row"><button id="run">Start worker</button><button class="alt" id="stop">Stop</button></div></section><section class="card"><img class="preview" id="preview" alt="Latest completed image"><div class="small">Latest completed image</div></section></div>
 <section class="card"><div class="row"><b id="progressText">Waiting for work</b><span class="muted" id="elapsed">0s</span></div><div class="bar"><div class="fill" id="fill"></div></div></section>
-<section class="metrics"><div class="metric"><span>Images this session</span><b id="images">0</b></div><div class="metric"><span>Earned this session</span><b id="earned">0 px</b></div><div class="metric"><span>Estimated rate</span><b id="rate">Calculating…</b></div></section></div>
+<section class="metrics"><div class="metric"><span>Images this session</span><b id="images">0</b></div><div class="metric"><span>Earned this session</span><b id="earned">0 px</b></div><div class="metric"><span>Estimated rate</span><b id="rate">Calculating…</b></div></section><section class="card"><label><input id="allowFree" type="checkbox"> Accept free draft jobs</label><p class="small">Free jobs earn no pixels and always wait behind paid work. Changing this briefly reconnects a running worker.</p></section></div>
 <details class="card"><summary>Details and command log</summary><pre id="log">No commands run yet.</pre><div class="small">Protected local dashboard · 127.0.0.1 only</div></details>
 </main><script>
 const $=id=>document.getElementById(id); async function call(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{'content-type':'application/json','x-peerpixel-token':'__TOKEN__'},body:body&&JSON.stringify(body)});const j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j}
 function tab(which){$('setupView').classList.toggle('active',which==='setup');$('runView').classList.toggle('active',which==='run');$('setupTab').classList.toggle('active',which==='setup');$('runTab').classList.toggle('active',which==='run')} $('setupTab').onclick=()=>tab('setup');$('runTab').onclick=()=>tab('run');
-let lastImage=0;async function refresh(){try{const s=await call('/api/state');$('pairText').textContent=s.paired?'Paired as '+s.deviceId+'.':'Paste the code from peerpixel.cc.';[['pairStep',s.paired],['downloadStep',s.modelReady],['benchStep',s.approved],['readyStep',s.ready]].forEach(([id,ok])=>$(id).classList.toggle('done',!!ok));$('readyText').textContent=s.ready?'All set. Open Running and press Start worker.':'Finish the steps above.';const active=!!s.running;$('state').textContent=s.connected?'Connected':active?'Starting…':'Stopped';$('phase').textContent=s.phase==='loading'?'Loading model…':s.phase==='rendering'?'Generating image':s.phase==='online'?'Online · waiting for work':active?'Starting worker':'Stopped';$('dot').className='dot '+(s.connected?'on':'');$('prompt').textContent=s.prompt|| (s.phase==='loading'?'The first model load can take several minutes. It is working.':'Start the worker, then you can leave this page open or close it.');$('log').textContent=s.log||'No commands run yet.';$('download').disabled=$('bench').disabled=$('run').disabled=active;$('stop').disabled=!active;const total=Number(s.steps)||0,step=Number(s.step)||0;$('fill').style.width=(total?Math.min(100,100*step/total):0)+'%';$('progressText').textContent=s.phase==='rendering'?`Step ${step} of ${total}`:'Waiting for work';$('elapsed').textContent=(s.elapsedSeconds||0)+'s';$('images').textContent=s.images||0;$('earned').textContent=(s.earnedPixels||0)+' px';$('rate').textContent=s.pixelsPerHour==null?'Calculating…':Number(s.pixelsPerHour).toFixed(1)+' px/hour';if(s.lastImageAt&&s.lastImageAt!==lastImage){lastImage=s.lastImageAt;$('preview').src='/api/preview?t='+lastImage+'&token=__TOKEN__'}}catch(e){$('state').textContent=e.message}}
+let lastImage=0;async function refresh(){try{const s=await call('/api/state');$('pairText').textContent=s.paired?'Paired as '+s.deviceId+'.':'Paste the code from peerpixel.cc.';[['pairStep',s.paired],['downloadStep',s.modelReady],['benchStep',s.approved],['readyStep',s.ready]].forEach(([id,ok])=>$(id).classList.toggle('done',!!ok));$('readyText').textContent=s.ready?'All set. Open Running and press Start worker.':'Finish the steps above.';const active=!!s.running;$('state').textContent=s.connected?'Connected':active?'Starting…':'Stopped';$('phase').textContent=s.phase==='loading'?'Loading model…':s.phase==='rendering'?'Generating image':s.phase==='online'?'Online · waiting for work':active?'Starting worker':'Stopped';$('dot').className='dot '+(s.connected?'on':'');$('prompt').textContent=s.prompt|| (s.phase==='loading'?'The first model load can take several minutes. It is working.':'Start the worker, then you can leave this page open or close it.');$('log').textContent=s.log||'No commands run yet.';$('download').disabled=$('bench').disabled=$('run').disabled=active;$('stop').disabled=!active;$('allowFree').checked=!!s.allowFree;const total=Number(s.steps)||0,step=Number(s.step)||0;$('fill').style.width=(total?Math.min(100,100*step/total):0)+'%';$('progressText').textContent=s.phase==='rendering'?`Step ${step} of ${total}`:'Waiting for work';$('elapsed').textContent=(s.elapsedSeconds||0)+'s';$('images').textContent=s.images||0;$('earned').textContent=(s.earnedPixels||0)+' px';$('rate').textContent=s.pixelsPerHour==null?'Calculating…':Number(s.pixelsPerHour).toFixed(1)+' px/hour';if(s.lastImageAt&&s.lastImageAt!==lastImage){lastImage=s.lastImageAt;$('preview').src='/api/preview?t='+lastImage+'&token=__TOKEN__'}}catch(e){$('state').textContent=e.message}}
 $('pair').onclick=async()=>{try{await call('/api/pair',{code:$('code').value});$('code').value='';refresh()}catch(e){$('pairText').textContent=e.message}};
 $('download').onclick=async()=>{await call('/api/start',{command:'download'});refresh()};$('bench').onclick=async()=>{await call('/api/start',{command:'bench'});refresh()};$('run').onclick=async()=>{await call('/api/start',{command:'run'});tab('run');refresh()};$('stop').onclick=async()=>{await call('/api/stop',{});refresh()};
 async function showWork(){try{const s=await call('/api/state'),working=['loading','benchmarking','downloading'].includes(s.phase);$('fill').classList.toggle('working',working);if(working){$('state').textContent='Working…';$('phase').textContent=s.phase==='downloading'?'Downloading model…':s.phase==='loading'?'Loading model…':'Warming up and benchmarking…';$('progressText').textContent='Working, this is not stuck';$('prompt').textContent='This can take several minutes the first time. It is working.'}}catch{}}refresh();showWork();setInterval(()=>{refresh();showWork()},1000)
+$('allowFree').onchange=async()=>{try{await call('/api/free',{allowFree:$('allowFree').checked});refresh()}catch(e){$('allowFree').checked=!$('allowFree').checked;alert(e.message)}};
 </script></body></html>"""
 
 
@@ -74,6 +81,10 @@ class CommandRunner:
         with self.lock:
             if self.process and self.process.poll() is None:
                 self.process.terminate()
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
             self.command = None
         return self.state()
 
@@ -98,11 +109,12 @@ def pair_machine(code):
 
 
 class DashboardApp:
-    def __init__(self, *, pair=pair_machine, state=None, start=None, stop=None):
+    def __init__(self, *, pair=pair_machine, state=None, start=None, stop=None, set_free=set_free_machine):
         self.pair = pair
         self.state = state or current_state
         self.start = start or RUNNER.start
         self.stop = stop or RUNNER.stop
+        self.set_free = set_free
 
     def handle(self, method, path, body=None):
         body = body or {}
@@ -122,6 +134,12 @@ class DashboardApp:
                 return 200, self.start(command)
             if method == "POST" and path == "/api/stop":
                 return 200, self.stop()
+            if method == "POST" and path == "/api/free":
+                self.set_free(bool(body.get("allowFree")))
+                if RUNNER.state().get("running") == "run":
+                    RUNNER.stop()
+                    RUNNER.start("run")
+                return 200, self.state()
             return 404, {"error": "Not found"}
         except (api.ApiError, ValueError) as error:
             return 400, {"error": str(error)}
@@ -156,6 +174,7 @@ def current_state():
         "modelReady": model_ready,
         "benchMs": settings.get("benchMs"),
         "approved": bool(settings.get("approved")),
+        "allowFree": bool(settings.get("allowFree")),
         "ready": bool(settings.get("token")) and model_ready and bool(settings.get("approved")),
         **runtime,
         **RUNNER.state(),

@@ -18,6 +18,11 @@ HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2
 RECONNECT_MAX = 60
 TICK = 1.0  # seconds waited for a message before the clock is redrawn
+MODEL_IDLE_UNLOAD_SECONDS = 2 * 60 * 60
+
+
+def should_unload_model(last_active: float, current: float, *, loaded: bool) -> bool:
+    return loaded and current - last_active >= MODEL_IDLE_UNLOAD_SECONDS
 
 
 def run(renderer, once: bool = False) -> int:
@@ -56,10 +61,22 @@ def run(renderer, once: bool = False) -> int:
     )
     display = ui.Display(status)
 
+    active_link = [None]
+    progress_sent_at = [0.0]
+
     def stepped(done: int, total: int) -> None:
         status.step, status.steps = done, total
         publish(step=done, steps=total,
                 elapsedSeconds=round(time.monotonic() - status.job_started, 1))
+        current = time.monotonic()
+        if active_link[0] and (done >= total or current - progress_sent_at[0] >= 0.5):
+            try:
+                active_link[0].send(json.dumps({
+                    "type": "progress", "jobId": active_link[1], "step": done, "steps": total,
+                }))
+            except Exception:  # noqa: BLE001 - telemetry cannot break a render
+                pass
+            progress_sent_at[0] = current
         display.refresh()
 
     url = config.API.replace("http", "ws", 1) + "/api/device/connect"
@@ -80,6 +97,7 @@ def run(renderer, once: bool = False) -> int:
                 # server last saw this machine.
                 with connect(url, additional_headers=headers, max_size=None,
                              ping_interval=None, close_timeout=5) as link:
+                    active_link[0] = link
                     backoff = RECONNECT_MIN
                     status.idle()
                     publish(phase="online", connected=True, prompt="", step=0, steps=0,
@@ -93,6 +111,10 @@ def run(renderer, once: bool = False) -> int:
                             # and the idle clock keep moving while nothing comes.
                             raw = link.recv(timeout=TICK)
                         except TimeoutError:
+                            if should_unload_model(status.idle_since, time.monotonic(),
+                                                   loaded=getattr(renderer, "pipe", None) is not None):
+                                renderer.unload()
+                                publish(modelLoaded=False)
                             if time.monotonic() - last_beat >= HEARTBEAT_SECONDS:
                                 link.send(json.dumps({"type": "heartbeat"}))
                                 last_beat = time.monotonic()
@@ -107,6 +129,12 @@ def run(renderer, once: bool = False) -> int:
                             continue
 
                         job = message["job"]
+                        active_link[1:] = [job["id"]]
+                        progress_sent_at[0] = 0.0
+                        if getattr(renderer, "pipe", None) is None:
+                            publish(phase="loading", connected=True, prompt=job["prompt"])
+                            renderer.warm()
+                            publish(modelLoaded=True)
                         status.begin(job["prompt"], int(job.get("steps", 0)))
                         publish(phase="rendering", connected=True, prompt=job["prompt"],
                                 step=0, steps=int(job.get("steps", 0)), elapsedSeconds=0)
@@ -139,6 +167,7 @@ def run(renderer, once: bool = False) -> int:
                             display.event(f"failed: {error}")
                             link.send(json.dumps({"type": "failed", "jobId": job["id"]}))
             except Exception as error:  # noqa: BLE001 - every disconnect is temporary
+                active_link[0] = None
                 status.state = "offline"
                 publish(phase="offline", connected=False)
                 display.event(f"disconnected ({error}) - retrying in {backoff}s")
