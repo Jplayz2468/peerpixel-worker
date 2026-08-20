@@ -1,98 +1,82 @@
 # PeerPixel Worker
 
-The desktop half of [PeerPixel](https://peerpixel.cc). It downloads the model
-once, runs it natively on your own GPU, and — when you switch it on — renders
-images for people who do not have a card fast enough to run one themselves.
+Renders images for people whose computers cannot. You earn 90% of the pixels
+each image is worth, and they show up on your dashboard at
+[peerpixel.cc](https://peerpixel.cc).
 
-You earn 90% of the credits every image you render is worth. They show up on
-your dashboard on the website.
+Runs headless on Windows, macOS and Linux. No window needed.
 
-> **Status: the loop works, the renderer does not.** Pairing, the benchmark
-> gate, the WebSocket connection, job delivery, upload and payment are all
-> live against peerpixel.cc. What is missing is the part that actually runs
-> the model — `--stub` stands in for it today.
-
-## Using it
+## Install
 
 ```bash
-node bin/peerpixel.mjs pair <CODE> --stub   # code comes from peerpixel.cc
-node bin/peerpixel.mjs bench --stub         # must finish 4 steps under 30s
-node bin/peerpixel.mjs run --stub           # renders until you stop it
+git clone https://github.com/Jplayz2468/peerpixel-worker
+cd peerpixel-worker
+./setup.sh          # Windows: .\setup.ps1
 ```
 
-No window, no desktop environment, no display. A box in a cupboard is a
-perfectly good peer. Identity lives in `~/.peerpixel/config.json`, written
-0600; the device token authorises this machine to render and nothing else.
+That puts a standalone Python and every library into `.venv` inside this
+folder. Nothing is installed system-wide.
 
-## How it renders
-
-FLUX.2 Klein the way it was meant to run: **diffusers on PyTorch**, using
-whatever accelerator the machine has — CUDA on most Windows and Linux boxes,
-MPS on Apple silicon, CPU as a last resort. Weights come from the official
-[`black-forest-labs/FLUX.2-klein-4B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B),
-which is ungated and already in diffusers layout, so there is nothing to
-convert and nothing of ours to host.
-
-Below roughly 24 GB the transformer and the text encoder cannot both sit on the
-accelerator, so the pipeline hands them over a layer at a time. Slower, but it
-is the difference between running and not running.
-
-`python/render.py` is a long-lived subprocess speaking line-delimited JSON over
-stdin and stdout. No port, no socket, nothing to firewall, and the model is
-loaded once and kept warm — which matters when loading takes tens of seconds.
-
-Variations and refines are image to image, which this pipeline supports
-directly: pass the previous image and a `strength` saying how much of it to
-throw away. Roughly 0.55 varies, 0.35 refines. Replaying a seed at a higher
-step count does **not** preserve composition under flow matching, which is why
-it is not done that way.
-
-## Setting it up
+## Commands
 
 ```bash
-./setup.sh          # macOS and Linux
-.\setup.ps1         # Windows
+uv run peerpixel pair ABC123    # get a code from peerpixel.cc
+uv run peerpixel download       # fetch the model (~15 GB), optional
+uv run peerpixel bench          # must do 4 steps in under 30 seconds
+uv run peerpixel run            # renders until you stop it
 ```
 
-That fetches a **standalone CPython** and every library into `.venv` inside this
-folder. Nothing is installed system-wide, nothing is compiled at install time,
-and nothing is hidden inside a bundle — the interpreter, the libraries and the
-code are all sitting there to be read, edited and stepped through while it runs.
-Copy the folder to another machine and it still works.
+`bench` and `run` fetch the model themselves if it is not there yet, so
+`download` is only for getting it over with first. Either way you get a
+progress line, and stopping part way costs you nothing: it resumes.
 
-The renderer is `python/render.py`. It is one plain file. If a render goes
-wrong, that is where to look, and you can edit it and restart the worker
-without rebuilding anything.
+`run` shows a live panel - what is connected, what it is rendering, how far
+through, what you have earned this session. Piped to a file or a systemd
+journal it prints plain timestamped lines instead.
 
-## Measured
+Two more: `peerpixel status` prints the state of the pool, and
+`peerpixel free on|off` is below.
 
-On an M-series Mac, 26 GB unified, 512x512:
+## Free work
+
+People without an account can ask for one 4-step draft at a time, up to 12 a
+day. Those jobs pay nothing and always queue behind paid ones.
+
+They only go to machines whose owner said yes:
+
+```bash
+uv run peerpixel free on        # also: uv run peerpixel run --free
+uv run peerpixel free off       # the default
+```
+
+The switch belongs to your account rather than to the machine, so the worker
+needs you signed in to set it: either use the Contribute page on the site, or
+export `PEERPIXEL_SESSION` with your `pp` cookie first. `peerpixel status`
+tells you if it only ever got as far as this machine.
+
+## Requirements
+
+An NVIDIA card with 8 GB or more, or an Apple silicon Mac with 16 GB or more.
+CPU works but is far too slow to pass the benchmark. Python 3.11 or newer,
+which `setup.sh` installs for you.
+
+## The code
+
+Eight short files, all plain Python:
 
 | | |
 | --- | --- |
-| 4 steps, text to image | ~20 s |
-| 16 steps, image to image at strength 0.35 | ~17 s |
+| `peerpixel/render.py` | runs the model - start here if an image looks wrong |
+| `peerpixel/worker.py` | holds the connection, takes jobs |
+| `peerpixel/ui.py` | the live panel, and the plain lines when nobody is watching |
+| `peerpixel/api.py` | talks to peerpixel.cc |
+| `peerpixel/download.py` | fetches the weights and shows how far along it is |
+| `peerpixel/config.py` | the device token, in `~/.peerpixel` |
+| `peerpixel/update.py` | says when a newer release exists, installs nothing |
+| `peerpixel/__main__.py` | the commands above |
 
-MPS is the slow path. CUDA is several times faster, which is most of the pool.
-
-## What it will do
-
-- Download the FLUX.2 Klein weights from Hugging Face, resumable, once
-- Run them through native ONNX Runtime, using whichever accelerator this machine
-  actually has rather than the browser's lowest common denominator
-- One switch: sharing on, sharing off. Nothing runs in the background when it
-  is off, and nothing runs at all until you say so
-- Show the job it is working on right now, live, with who asked for it
-- Update itself, because a stale worker returning bad images is worse than no
-  worker at all
-
-## Why not just the browser
-
-The browser build needs about 7.9 GB of memory and WebNN, which rules out most
-Windows machines with an 8 GB card. Running natively means picking the right
-execution provider per platform, quantising further, and offloading layers —
-none of which the browser will let us do.
+Edit any of them and restart. There is nothing to rebuild.
 
 ## Licence
 
-MIT.
+MIT

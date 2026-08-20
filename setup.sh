@@ -1,24 +1,20 @@
 #!/usr/bin/env bash
-# Build the environment. Everything ends up inside this folder: the Python
-# interpreter, the libraries, and the source you are reading. Nothing touches
-# the system Python and nothing is hidden in a bundle.
+# Builds the environment inside this folder: a standalone Python plus every
+# library, in ./.venv. Nothing is installed system-wide.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 if ! command -v uv >/dev/null 2>&1; then
-  echo "Installing uv (fetches a standalone Python, no system changes)..."
+  echo "Installing uv..."
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# uv downloads a relocatable CPython rather than using whatever is on the box,
-# so every install is the same interpreter and the same wheels.
 uv python install 3.12
 uv sync --python 3.12
 
 echo
-echo "Done. The environment is in ./.venv — interpreter and all."
-echo
-echo "  node bin/peerpixel.mjs pair <CODE>"
-echo "  node bin/peerpixel.mjs bench"
-echo "  node bin/peerpixel.mjs run"
+echo "Done. Now:"
+echo "  uv run peerpixel pair CODE     (get a code from peerpixel.cc)"
+echo "  uv run peerpixel bench"
+echo "  uv run peerpixel run"

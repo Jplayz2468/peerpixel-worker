@@ -1,0 +1,78 @@
+"""Thin wrapper over the PeerPixel HTTP API. Standard library only."""
+from __future__ import annotations
+
+import json
+import urllib.error
+import urllib.request
+
+from . import config
+
+
+class ApiError(Exception):
+    def __init__(self, status: int, code: str, body: dict | None = None):
+        super().__init__(f"{code} ({status})")
+        self.status = status
+        self.code = code
+        self.body = body or {}
+
+
+#: Cloudflare blocks urllib's default user agent outright, so identify properly.
+USER_AGENT = "peerpixel-worker/0.1 (+https://github.com/Jplayz2468/peerpixel-worker)"
+
+
+def _call(path: str, *, method="GET", payload=None, raw=None, auth=True, cookie=False, timeout=120):
+    headers = {"user-agent": USER_AGENT, "accept": "application/json"}
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode()
+        headers["content-type"] = "application/json"
+    elif raw is not None:
+        body = raw
+        headers["content-type"] = "image/jpeg"
+    if auth:
+        token = config.read().get("token")
+        if token:
+            headers["authorization"] = f"Bearer {token}"
+    if cookie:
+        session = config.session()
+        if session:
+            headers["cookie"] = f"pp={session}"
+
+    request = urllib.request.Request(f"{config.API}{path}", data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            text = response.read().decode() or "{}"
+            return json.loads(text)
+    except urllib.error.HTTPError as error:
+        text = error.read().decode() or "{}"
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = {"error": text[:200]}
+        raise ApiError(error.code, parsed.get("error", "http_error"), parsed) from None
+
+
+def pair(code: str, info: dict) -> dict:
+    return _call("/api/pair/claim", method="POST", payload={"code": code, **info}, auth=False)
+
+
+def submit_bench(ms: int, accelerator: str) -> dict:
+    return _call("/api/device/bench", method="POST", payload={"ms": ms, "accelerator": accelerator})
+
+
+def submit_result(job_id: str, jpeg: bytes) -> dict:
+    return _call(f"/api/device/job/{job_id}/result", method="POST", raw=jpeg, timeout=300)
+
+
+def set_free(device_id: str, allow: bool) -> dict:
+    """Opt this machine in or out of unpaid work.
+
+    Account-level, so it wants the website session; a device token gets a 401
+    here no matter how valid it is. The caller explains that.
+    """
+    return _call("/api/device/free", method="POST", cookie=True,
+                 payload={"deviceId": device_id, "allowFree": bool(allow)})
+
+
+def pool() -> dict:
+    return _call("/api/pool", auth=False)
