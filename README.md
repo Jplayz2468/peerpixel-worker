@@ -4,7 +4,8 @@ Renders images for people whose computers cannot. You earn 90% of the pixels
 each image is worth, and they show up on your dashboard at
 [peerpixel.cc](https://peerpixel.cc).
 
-Runs headless on Windows, macOS and Linux. No window needed.
+Runs on Windows, macOS and Linux. Setup opens a small dashboard in your browser,
+served only from this machine. After that it can run headless with no window.
 
 ## Install
 
@@ -21,8 +22,9 @@ folder. Nothing is installed system-wide.
 
 ```bash
 uv run peerpixel pair ABC123    # get a code from peerpixel.cc
+uv run peerpixel dashboard     # local pairing, benchmark and worker controls
 uv run peerpixel download       # fetch the model (~15 GB), optional
-uv run peerpixel bench          # must do 4 steps in under 30 seconds
+uv run peerpixel bench          # warm once, then measure 4 steady-state steps
 uv run peerpixel run            # renders until you stop it
 ```
 

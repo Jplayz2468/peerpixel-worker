@@ -13,7 +13,5 @@ uv python install 3.12
 uv sync --python 3.12
 
 Write-Host ""
-Write-Host "Done. Now:"
-Write-Host "  uv run peerpixel pair CODE"
-Write-Host "  uv run peerpixel bench"
-Write-Host "  uv run peerpixel run"
+Write-Host "Done. Opening the worker dashboard..."
+uv run peerpixel dashboard

@@ -1,6 +1,7 @@
 """peerpixel - render for people whose machines cannot.
 
     peerpixel pair CODE     link this machine to your account
+    peerpixel dashboard     open the local setup and status page
     peerpixel download      fetch the model (~15 GB) ahead of time
     peerpixel bench         prove it is fast enough
     peerpixel run           start rendering (Ctrl-C to stop)
@@ -16,6 +17,7 @@ import sys
 import time
 
 from . import api, config, download, update
+from .benchmark import run_benchmark
 from .render import Renderer
 from .worker import run as run_worker
 
@@ -50,15 +52,17 @@ def cmd_download(_argv):
     print(f"Model ready at {download.ensure()}")
 
 
+def cmd_dashboard(_argv):
+    from .dashboard import serve
+
+    serve()
+
+
 def cmd_bench(_argv):
     download.ensure()
     renderer = Renderer()
-    print(f"Benchmarking on {renderer.accelerator} - 4 steps...")
-    renderer.warm()
-    started = time.time()
-    renderer.render({"id": "bench", "prompt": "a lighthouse made of blown glass", "seed": 1, "steps": 4})
-    ms = int((time.time() - started) * 1000)
-    result = api.submit_bench(ms, renderer.accelerator)
+    print(f"Warming up {renderer.accelerator}...")
+    ms, result = run_benchmark(renderer)
     print(f"{ms / 1000:.1f}s for 4 steps (limit {result['limitMs'] / 1000:.0f}s)")
     if result["approved"]:
         print("Approved. Run `peerpixel run` to start earning.")
@@ -117,6 +121,7 @@ def cmd_status(_argv):
 
 COMMANDS = {
     "pair": cmd_pair,
+    "dashboard": cmd_dashboard,
     "download": cmd_download,
     "bench": cmd_bench,
     "free": cmd_free,

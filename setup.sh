@@ -14,7 +14,5 @@ uv python install 3.12
 uv sync --python 3.12
 
 echo
-echo "Done. Now:"
-echo "  uv run peerpixel pair CODE     (get a code from peerpixel.cc)"
-echo "  uv run peerpixel bench"
-echo "  uv run peerpixel run"
+echo "Done. Opening the worker dashboard..."
+uv run peerpixel dashboard
