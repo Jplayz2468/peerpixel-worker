@@ -26,7 +26,7 @@ PAGE = r"""<!doctype html>
 <div id="setupView" class="view active">
 <section id="pairStep" class="card step"><div class="num">1</div><div><h2>Pair this device</h2><p id="pairText">Paste the code from peerpixel.cc.</p><div class="row"><input id="code" maxlength="12" placeholder="PAIRING CODE"><button id="pair">Pair</button></div></div></section>
 <section id="downloadStep" class="card step"><div class="num">2</div><div><h2>Download the model</h2><p>About 15 GB. Progress appears below and interrupted downloads resume.</p></div><button id="download">Download</button></section>
-<section id="benchStep" class="card step"><div class="num">3</div><div><h2>Warm up and benchmark</h2><p>Loading can take several minutes the first time. That is normal—not a freeze.</p></div><button id="bench">Benchmark</button></section>
+<section id="benchStep" class="card step"><div class="num">3</div><div><h2>Warm up and benchmark</h2><p>Loading can take several minutes the first time. That is normal, not a freeze.</p></div><button id="bench">Benchmark</button></section>
 <section id="readyStep" class="card step"><div class="num">4</div><div><h2>Ready to contribute</h2><p id="readyText">Finish the steps above.</p></div></section>
 </div>
 <div id="runView" class="view"><div class="hero"><section class="card"><div class="status"><span class="dot" id="dot"></span><b id="state">Checking…</b></div><div class="big" id="phase">Stopped</div><p id="prompt">Start the worker, then you can leave this page open or close it.</p><div class="row"><button id="run">Start worker</button><button class="alt" id="stop">Stop</button></div></section><section class="card"><img class="preview" id="preview" alt="Latest completed image"><div class="small">Latest completed image</div></section></div>
@@ -39,7 +39,7 @@ function tab(which){$('setupView').classList.toggle('active',which==='setup');$(
 let lastImage=0;async function refresh(){try{const s=await call('/api/state');$('pairText').textContent=s.paired?'Paired as '+s.deviceId+'.':'Paste the code from peerpixel.cc.';[['pairStep',s.paired],['downloadStep',s.modelReady],['benchStep',s.approved],['readyStep',s.ready]].forEach(([id,ok])=>$(id).classList.toggle('done',!!ok));$('readyText').textContent=s.ready?'All set. Open Running and press Start worker.':'Finish the steps above.';const active=!!s.running;$('state').textContent=s.connected?'Connected':active?'Starting…':'Stopped';$('phase').textContent=s.phase==='loading'?'Loading model…':s.phase==='rendering'?'Generating image':s.phase==='online'?'Online · waiting for work':active?'Starting worker':'Stopped';$('dot').className='dot '+(s.connected?'on':'');$('prompt').textContent=s.prompt|| (s.phase==='loading'?'The first model load can take several minutes. It is working.':'Start the worker, then you can leave this page open or close it.');$('log').textContent=s.log||'No commands run yet.';$('download').disabled=$('bench').disabled=$('run').disabled=active;$('stop').disabled=!active;const total=Number(s.steps)||0,step=Number(s.step)||0;$('fill').style.width=(total?Math.min(100,100*step/total):0)+'%';$('progressText').textContent=s.phase==='rendering'?`Step ${step} of ${total}`:'Waiting for work';$('elapsed').textContent=(s.elapsedSeconds||0)+'s';$('images').textContent=s.images||0;$('earned').textContent=(s.earnedPixels||0)+' px';$('rate').textContent=s.pixelsPerHour==null?'Calculating…':Number(s.pixelsPerHour).toFixed(1)+' px/hour';if(s.lastImageAt&&s.lastImageAt!==lastImage){lastImage=s.lastImageAt;$('preview').src='/api/preview?t='+lastImage+'&token=__TOKEN__'}}catch(e){$('state').textContent=e.message}}
 $('pair').onclick=async()=>{try{await call('/api/pair',{code:$('code').value});$('code').value='';refresh()}catch(e){$('pairText').textContent=e.message}};
 $('download').onclick=async()=>{await call('/api/start',{command:'download'});refresh()};$('bench').onclick=async()=>{await call('/api/start',{command:'bench'});refresh()};$('run').onclick=async()=>{await call('/api/start',{command:'run'});tab('run');refresh()};$('stop').onclick=async()=>{await call('/api/stop',{});refresh()};
-async function showWork(){try{const s=await call('/api/state'),working=['loading','benchmarking','downloading'].includes(s.phase);$('fill').classList.toggle('working',working);if(working){$('state').textContent='Working…';$('phase').textContent=s.phase==='downloading'?'Downloading model…':s.phase==='loading'?'Loading model…':'Warming up and benchmarking…';$('progressText').textContent='Working — this is not stuck';$('prompt').textContent='This can take several minutes the first time. It is working.'}}catch{}}refresh();showWork();setInterval(()=>{refresh();showWork()},1000)
+async function showWork(){try{const s=await call('/api/state'),working=['loading','benchmarking','downloading'].includes(s.phase);$('fill').classList.toggle('working',working);if(working){$('state').textContent='Working…';$('phase').textContent=s.phase==='downloading'?'Downloading model…':s.phase==='loading'?'Loading model…':'Warming up and benchmarking…';$('progressText').textContent='Working, this is not stuck';$('prompt').textContent='This can take several minutes the first time. It is working.'}}catch{}}refresh();showWork();setInterval(()=>{refresh();showWork()},1000)
 </script></body></html>"""
 
 
@@ -222,7 +222,19 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(*, open_browser=True, port=8765):
     Handler.token = secrets.token_urlsafe(24)
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    # 8765 is a common port and a second worker on the same machine would want
+    # its own. Falling over with a traceback is the worst possible outcome for
+    # the people this page exists for, so try the preferred port, then a few
+    # after it, then let the OS pick anything free.
+    server = None
+    for candidate in [port, port + 1, port + 2, port + 3, 0]:
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", candidate), Handler)
+            break
+        except OSError:
+            continue
+    if server is None:
+        raise SystemExit("could not open a local port for the dashboard")
     url = f"http://127.0.0.1:{server.server_port}"
     print(f"PeerPixel dashboard: {url}")
     if open_browser:
