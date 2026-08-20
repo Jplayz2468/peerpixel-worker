@@ -50,13 +50,17 @@ class Renderer:
         if self.pipe is not None:
             return
         import torch
-        from diffusers import Flux2KleinPipeline
+        from diffusers import Flux2KleinInpaintPipeline
 
         device, dtype, label, total = pick_device()
         self.device, self.label = device, label
         out({"type": "loading", "device": device, "accelerator": label})
 
-        pipe = Flux2KleinPipeline.from_pretrained(MODEL, torch_dtype=dtype)
+        # The inpaint pipeline is the one that takes `strength`, which is what
+        # variations and refines need. With a fully white mask it is ordinary
+        # image to image, and with no image at all it is ordinary text to image,
+        # so one loaded pipeline covers every job the network sends.
+        pipe = Flux2KleinInpaintPipeline.from_pretrained(MODEL, torch_dtype=dtype)
         # Under roughly 24 GB the transformer and the text encoder cannot both
         # sit on the accelerator, so hand them over a layer at a time. Slower,
         # but it is the difference between running and not running at all.
@@ -82,22 +86,36 @@ class Renderer:
             out({"type": "progress", "id": job_id, "step": index + 1, "total": steps})
             return kwargs
 
+        width = int(request.get("width", 512))
+        height = int(request.get("height", 512))
+
+        # Klein is a step-distilled model: guidance_scale is ignored, and
+        # diffusers says so on every call. Not passing it keeps the logs honest.
         call = {
             "prompt": request["prompt"],
             "num_inference_steps": steps,
-            "guidance_scale": float(request.get("guidance", 4)),
             "generator": generator,
-            "height": int(request.get("height", 512)),
-            "width": int(request.get("width", 512)),
+            "height": height,
+            "width": width,
             "callback_on_step_end": on_step,
         }
 
-        # Variations and refines are image to image: keep the composition, rework
-        # the detail. strength is how much of the original to throw away.
+        from PIL import Image
         if request.get("init"):
-            from PIL import Image
-            call["image"] = Image.open(io.BytesIO(base64.b64decode(request["init"]))).convert("RGB")
+            # Variation and refine: keep the composition, rework the detail.
+            # strength is how much of the original to throw away — roughly 0.55
+            # varies noticeably, 0.35 sharpens without moving anything.
+            source = Image.open(io.BytesIO(base64.b64decode(request["init"]))).convert("RGB")
+            if source.size != (width, height):
+                source = source.resize((width, height), Image.LANCZOS)
+            call["image"] = source
+            call["mask_image"] = Image.new("L", (width, height), 255)
             call["strength"] = float(request.get("strength", 0.55))
+        else:
+            # A blank source with full strength is a plain text-to-image run.
+            call["image"] = Image.new("RGB", (width, height), (0, 0, 0))
+            call["mask_image"] = Image.new("L", (width, height), 255)
+            call["strength"] = 1.0
 
         image = self.pipe(**call).images[0]
         buffer = io.BytesIO()

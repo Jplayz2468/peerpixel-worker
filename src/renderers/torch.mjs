@@ -17,6 +17,7 @@ function findPython() {
   const candidates = [
     process.env.PEERPIXEL_PYTHON,
     join(here, "..", "..", ".venv", "bin", "python"),
+    join(here, "..", "..", ".venv", "Scripts", "python.exe"),
     "python3",
   ].filter(Boolean);
   for (const candidate of candidates) {

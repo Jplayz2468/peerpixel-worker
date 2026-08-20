@@ -1,0 +1,20 @@
+[project]
+name = "peerpixel-worker"
+version = "0.1.0"
+description = "Renders FLUX.2 Klein for people whose machines cannot."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "torch>=2.6",
+  "diffusers>=0.39",
+  "transformers>=4.57",
+  "accelerate>=1.0",
+  "safetensors>=0.4",
+  "pillow>=10",
+  "huggingface-hub>=0.30",
+]
+
+[tool.uv]
+# Everything lands inside .venv in this folder, including the interpreter, so
+# the whole thing can be copied to another machine and still run. Nothing is
+# installed system-wide and nothing is compiled at install time.
+managed = true

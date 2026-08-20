@@ -47,9 +47,33 @@ throw away. Roughly 0.55 varies, 0.35 refines. Replaying a seed at a higher
 step count does **not** preserve composition under flow matching, which is why
 it is not done that way.
 
+## Setting it up
+
 ```bash
-python3 -m venv .venv && .venv/bin/pip install "torch" "diffusers>=0.39" transformers accelerate safetensors pillow
+./setup.sh          # macOS and Linux
+.\setup.ps1         # Windows
 ```
+
+That fetches a **standalone CPython** and every library into `.venv` inside this
+folder. Nothing is installed system-wide, nothing is compiled at install time,
+and nothing is hidden inside a bundle — the interpreter, the libraries and the
+code are all sitting there to be read, edited and stepped through while it runs.
+Copy the folder to another machine and it still works.
+
+The renderer is `python/render.py`. It is one plain file. If a render goes
+wrong, that is where to look, and you can edit it and restart the worker
+without rebuilding anything.
+
+## Measured
+
+On an M-series Mac, 26 GB unified, 512x512:
+
+| | |
+| --- | --- |
+| 4 steps, text to image | ~20 s |
+| 16 steps, image to image at strength 0.35 | ~17 s |
+
+MPS is the slow path. CUDA is several times faster, which is most of the pool.
 
 ## What it will do
 
