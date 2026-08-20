@@ -14,13 +14,8 @@ import { createStubRenderer } from "../src/renderers/stub.mjs";
    the CLI says so rather than pretending. */
 async function pickRenderer(argv) {
   if (argv.includes("--stub")) return createStubRenderer();
-  try {
-    const { createOrtRenderer } = await import("../src/renderers/ort.mjs");
-    return createOrtRenderer();
-  } catch {
-    console.error("No native renderer is built yet. Re-run with --stub to exercise the loop.");
-    process.exit(2);
-  }
+  const { createTorchRenderer } = await import("../src/renderers/torch.mjs");
+  return createTorchRenderer();
 }
 
 const machine = () => ({

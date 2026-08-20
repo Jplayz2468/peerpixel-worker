@@ -4,7 +4,19 @@
   "type": "module",
   "description": "Headless worker for PeerPixel: renders images for people whose machines cannot.",
   "license": "MIT",
-  "engines": { "node": ">=22" },
-  "bin": { "peerpixel": "bin/peerpixel.mjs" },
-  "scripts": { "start": "node bin/peerpixel.mjs run" }
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "peerpixel": "bin/peerpixel.mjs"
+  },
+  "scripts": {
+    "start": "node bin/peerpixel.mjs run"
+  },
+  "dependencies": {
+    "onnxruntime-node": "^1.27.0"
+  },
+  "allowScripts": {
+    "onnxruntime-node@1.27.0": true
+  }
 }

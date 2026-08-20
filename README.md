@@ -24,18 +24,32 @@ No window, no desktop environment, no display. A box in a cupboard is a
 perfectly good peer. Identity lives in `~/.peerpixel/config.json`, written
 0600; the device token authorises this machine to render and nothing else.
 
-## Adding the real renderer
+## How it renders
 
-Drop in `src/renderers/ort.mjs` exporting `createOrtRenderer()`. A renderer is:
+FLUX.2 Klein the way it was meant to run: **diffusers on PyTorch**, using
+whatever accelerator the machine has — CUDA on most Windows and Linux boxes,
+MPS on Apple silicon, CPU as a last resort. Weights come from the official
+[`black-forest-labs/FLUX.2-klein-4B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B),
+which is ungated and already in diffusers layout, so there is nothing to
+convert and nothing of ours to host.
 
-```js
-{ name, accelerator, async warm(), async render(job, onProgress) -> Buffer }
+Below roughly 24 GB the transformer and the text encoder cannot both sit on the
+accelerator, so the pipeline hands them over a layer at a time. Slower, but it
+is the difference between running and not running.
+
+`python/render.py` is a long-lived subprocess speaking line-delimited JSON over
+stdin and stdout. No port, no socket, nothing to firewall, and the model is
+loaded once and kept warm — which matters when loading takes tens of seconds.
+
+Variations and refines are image to image, which this pipeline supports
+directly: pass the previous image and a `strength` saying how much of it to
+throw away. Roughly 0.55 varies, 0.35 refines. Replaying a seed at a higher
+step count does **not** preserve composition under flow matching, which is why
+it is not done that way.
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install "torch" "diffusers>=0.39" transformers accelerate safetensors pillow
 ```
-
-Return JPEG bytes. The CLI picks it up automatically and `--stub` stops being
-needed. It should use native ONNX Runtime — DirectML on Windows, CoreML on
-macOS — rather than WebNN, which is the browser's constraint and the reason
-the browser build needs 8 GB and a flag.
 
 ## What it will do
 
