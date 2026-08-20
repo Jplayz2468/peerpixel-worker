@@ -18,6 +18,19 @@ cd peerpixel-worker
 That puts a standalone Python and every library into `.venv` inside this
 folder. Nothing is installed system-wide.
 
+Setup is a one-time checklist: pair the machine, download the model, and run
+the benchmark. After it says **Ready**, normal use is simply opening the
+dashboard and pressing **Start worker**.
+
+## Update
+
+```bash
+./update.sh          # Windows: .\update.ps1
+```
+
+The updater only accepts fast-forward Git updates, syncs the environment, and
+reopens the dashboard. It never resets or overwrites local edits.
+
 ## Commands
 
 ```bash

@@ -39,6 +39,13 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"], "Pairing code required")
 
+    def test_download_is_an_allowed_dashboard_command(self):
+        calls = []
+        app = DashboardApp(state=lambda: {}, start=lambda command: calls.append(command) or {}, stop=lambda: {})
+        status, _ = app.handle("POST", "/api/start", {"command": "download"})
+        self.assertEqual(status, 200)
+        self.assertEqual(calls, ["download"])
+
 
 if __name__ == "__main__":
     unittest.main()

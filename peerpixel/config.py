@@ -15,6 +15,8 @@ API = os.environ.get("PEERPIXEL_API", "https://peerpixel.cc").rstrip("/")
 SESSION = os.environ.get("PEERPIXEL_SESSION", "")
 HOME = Path(os.environ.get("PEERPIXEL_HOME", Path.home() / ".peerpixel"))
 FILE = HOME / "config.json"
+DASHBOARD_STATE_FILE = "dashboard-state.json"
+DASHBOARD_PREVIEW_FILE = "dashboard-preview.jpg"
 
 
 def session() -> str:

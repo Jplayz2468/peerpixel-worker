@@ -16,7 +16,7 @@ import socket
 import sys
 import time
 
-from . import api, config, download, update
+from . import api, config, dashboard_state, download, update
 from .benchmark import run_benchmark
 from .render import Renderer
 from .worker import run as run_worker
@@ -49,7 +49,13 @@ def cmd_pair(argv):
 
 
 def cmd_download(_argv):
-    print(f"Model ready at {download.ensure()}")
+    dashboard_state.publish({"phase": "downloading"})
+    try:
+        print(f"Model ready at {download.ensure()}")
+        dashboard_state.publish({"phase": "model-ready"})
+    except BaseException:
+        dashboard_state.publish({"phase": "download-failed"})
+        raise
 
 
 def cmd_dashboard(_argv):
@@ -59,10 +65,19 @@ def cmd_dashboard(_argv):
 
 
 def cmd_bench(_argv):
+    dashboard_state.publish({"phase": "loading", "step": 0, "steps": 2})
     download.ensure()
     renderer = Renderer()
     print(f"Warming up {renderer.accelerator}...")
-    ms, result = run_benchmark(renderer)
+    dashboard_state.publish({"phase": "benchmarking", "step": 0, "steps": 2})
+    try:
+        ms, result = run_benchmark(renderer)
+    except BaseException:
+        dashboard_state.publish({"phase": "benchmark-failed"})
+        raise
+    config.write(benchMs=ms, approved=bool(result.get("approved")))
+    dashboard_state.publish({"phase": "ready" if result.get("approved") else "benchmark-failed",
+                             "step": 2, "steps": 2})
     print(f"{ms / 1000:.1f}s for 4 steps (limit {result['limitMs'] / 1000:.0f}s)")
     if result["approved"]:
         print("Approved. Run `peerpixel run` to start earning.")
