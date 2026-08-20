@@ -1,0 +1,10 @@
+{
+  "name": "peerpixel-worker",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Headless worker for PeerPixel: renders images for people whose machines cannot.",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "bin": { "peerpixel": "bin/peerpixel.mjs" },
+  "scripts": { "start": "node bin/peerpixel.mjs run" }
+}
