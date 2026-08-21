@@ -44,6 +44,8 @@ to look, and you can edit it and restart the worker without rebuilding anything.
 from __future__ import annotations
 
 import io
+import hashlib
+import json
 import os
 import subprocess
 import time
@@ -117,6 +119,14 @@ STYLE_RECIPES = {
     "anime": ("anime-v1", (("rebelmidjourney", 0.20), ("flux-klein-art", 0.85))),
     "vector": ("vector-v1", (("simplefinevector", 1.00),)),
 }
+
+
+def _digest(value) -> str:
+    if isinstance(value, bytes):
+        payload = value
+    else:
+        payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
 #: Precision, by name, so a machine that renders badly in one has somewhere to
@@ -500,11 +510,25 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
+        runtime = "peerpixel-worker/0.6.1"
         return jpeg, {
             "enhancedPrompt": effective,
             "moderation": moderation,
             "manifestVersion": job.get("manifestVersion", MANIFEST_VERSION),
             "recipeId": STYLE_RECIPES[job.get("style", "photoreal")][0],
+            "attestations": [
+                {"operation": "prompt", "inputDigest": _digest({
+                    "prompt": job["prompt"], "style": job.get("style", "photoreal"),
+                    "enhance": job.get("enhance", True),
+                }), "outputDigest": _digest(effective), "runtimeVersion": runtime},
+                {"operation": "render", "inputDigest": _digest({
+                    "prompt": effective, "seed": job.get("seed", 0),
+                    "recipe": STYLE_RECIPES[job.get("style", "photoreal")][0],
+                    "operation": job.get("operation", "master"),
+                }), "outputDigest": _digest(jpeg), "runtimeVersion": runtime},
+                {"operation": "moderation", "inputDigest": _digest(jpeg),
+                 "outputDigest": _digest(moderation), "runtimeVersion": runtime},
+            ],
         }
 
     def demote(self) -> str | None:

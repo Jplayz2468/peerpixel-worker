@@ -12,6 +12,7 @@ nobody can read back. A box in a cupboard is a perfectly good peer.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import time
 
@@ -320,13 +321,47 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 "on_decode": lambda: bar.begin("decode"),
                 "on_demote": lambda name: bar.note(f"retrying in {name}"),
             }
-            if operation == "upscale":
+            observed_digest = None
+            if operation == "auxiliary_verify":
+                from .render import _digest
+                auxiliary = job.get("auxiliaryOperation")
+                if auxiliary == "prompt":
+                    from .prompt_enhancer import PromptEnhancer
+                    if getattr(renderer, "_enhancer", None) is None:
+                        renderer._enhancer = PromptEnhancer()
+                    output = renderer._enhancer.enhance(
+                        job["prompt"], job.get("style", "photoreal"),
+                        enabled=job.get("enhance", True),
+                    )
+                    observed_digest = _digest(output)
+                elif auxiliary == "moderation":
+                    from .safety import SafetyClassifier
+                    if getattr(renderer, "_safety", None) is None:
+                        renderer._safety = SafetyClassifier()
+                    observed_digest = _digest(renderer._safety.classify(api.auxiliary_input(job["id"])))
+                elif auxiliary == "upscale":
+                    from .upscale import Upscaler
+                    renderer.unload()
+                    if not hasattr(renderer, "_upscaler") or renderer._upscaler is None:
+                        renderer._upscaler = Upscaler()
+                    observed_digest = hashlib.sha256(
+                        renderer._upscaler.upscale(api.auxiliary_input(job["id"]))
+                    ).hexdigest()
+                else:
+                    raise RuntimeError("unknown_auxiliary_operation")
+                jpeg, evidence = b"", {}
+            elif operation == "upscale":
                 from .upscale import Upscaler
                 renderer.unload()
                 if not hasattr(renderer, "_upscaler") or renderer._upscaler is None:
                     renderer._upscaler = Upscaler()
-                jpeg = renderer._upscaler.upscale(api.upscale_source(job["id"]))
-                evidence = {"manifestVersion": job.get("manifestVersion", "2026-08-21.1")}
+                source = api.upscale_source(job["id"])
+                jpeg = renderer._upscaler.upscale(source)
+                evidence = {"manifestVersion": job.get("manifestVersion", "2026-08-21.1"),
+                            "attestations": [{"operation": "upscale",
+                                "inputDigest": hashlib.sha256(source).hexdigest(),
+                                "outputDigest": hashlib.sha256(jpeg).hexdigest(),
+                                "runtimeVersion": "peerpixel-worker/0.6.1"}]}
             elif hasattr(renderer, "generate_job"):
                 jpeg, evidence = renderer.generate_job(job, **render_options)
             else:  # small test doubles and third-party renderer integrations
@@ -345,7 +380,10 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 except OSError:
                     pass  # a full disk costs a thumbnail, not a render
 
-            if operation == "verify":
+            if operation == "auxiliary_verify":
+                api.submit_auxiliary(job["id"], observed_digest)
+                link.send(json.dumps({"type": "finished", "jobId": job["id"]}))
+            elif operation == "verify":
                 subject = api.verify_asset(job["id"], "subject")
                 measurements = compare.compare(subject, jpeg)
                 measurements["image"] = base64.b64encode(jpeg).decode()

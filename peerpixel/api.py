@@ -98,6 +98,24 @@ def upscale_source(job_id: str) -> bytes:
         raise ApiError(error.code, "upscale_source_failed") from None
 
 
+def auxiliary_input(check_id: str) -> bytes:
+    token = config.read().get("token", "")
+    request = urllib.request.Request(
+        f"{config.API}/api/device/auxiliary/{check_id}/input",
+        headers={"user-agent": USER_AGENT, "authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        raise ApiError(error.code, "auxiliary_input_failed") from None
+
+
+def submit_auxiliary(check_id: str, output_digest: str) -> dict:
+    return _call(f"/api/device/auxiliary/{check_id}/result", method="POST",
+                 payload={"outputDigest": output_digest}, timeout=300)
+
+
 def set_free(device_id: str, allow: bool) -> dict:
     """Opt this machine in or out of unpaid work.
 
