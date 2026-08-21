@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>PeerPixel</title>
+<link rel="stylesheet" href="/ui/app.css">
+</head>
+<body data-token="__TOKEN__">
+
+<header class="top">
+  <div class="mark">
+    <span class="glyph" aria-hidden="true"></span>
+    <span class="wordmark">PeerPixel</span>
+  </div>
+  <div class="top-right">
+    <span class="pill" id="pill"><i class="dot"></i><b id="pillText">Starting</b></span>
+    <button class="ghost" id="quit" title="Close PeerPixel">Quit</button>
+  </div>
+</header>
+
+<main>
+
+  <section class="banner" id="updateBanner" hidden>
+    <div>
+      <b>A newer PeerPixel is out.</b>
+      <span class="muted" id="updateVersions"></span>
+    </div>
+    <button id="updateNow">Install it</button>
+  </section>
+
+  <!-- The one bar. Whatever this machine is doing, it is described here, it
+       moves, and it says when it ends. -->
+  <section class="stage" id="stage">
+    <div class="stage-head">
+      <div>
+        <div class="eyebrow" id="stageStep">Getting ready</div>
+        <h1 id="stageTitle">Starting up</h1>
+        <p class="detail" id="stageDetail">&nbsp;</p>
+      </div>
+      <div class="readout">
+        <div class="percent" id="stagePercent">0%</div>
+        <div class="eta" id="stageEta">working out how long</div>
+      </div>
+    </div>
+    <div class="track"><div class="fill" id="stageFill"></div></div>
+    <div class="stage-foot">
+      <span class="muted" id="stageQueue"></span>
+      <span class="foot-actions">
+        <button class="ghost" id="cancel" hidden>Cancel</button>
+        <button class="ghost" id="stopWorker" hidden>Stop after this</button>
+      </span>
+    </div>
+  </section>
+
+  <section class="rest" id="restCard" hidden>
+    <div class="rest-inner">
+      <div>
+        <h1 id="restTitle">Ready</h1>
+        <p class="detail" id="restDetail">Press start and this machine begins taking work.</p>
+      </div>
+      <button id="power">Start rendering</button>
+    </div>
+  </section>
+
+  <div class="columns">
+
+    <section class="card" id="setupCard">
+      <h2>Setup</h2>
+      <p class="muted">Once, on this machine. It runs itself; the code is the only thing it needs from you.</p>
+      <ol class="checklist">
+        <li id="stepDependencies"><i></i><div><b>Rendering libraries</b><span>A few gigabytes, kept inside this folder.</span></div></li>
+        <li id="stepPaired"><i></i><div><b>Pair with your account</b><span id="pairedNote">Get a code from peerpixel.cc.</span>
+          <div class="pair-row">
+            <input id="code" maxlength="12" spellcheck="false" placeholder="PAIRING CODE" autocomplete="off">
+            <button id="pair">Pair</button>
+          </div>
+          <a class="link" href="https://peerpixel.cc/app" target="_blank" rel="noreferrer">Open peerpixel.cc to get a code</a>
+        </div></li>
+        <li id="stepModel"><i></i><div><b>The model</b><span>About 15 GB. Interrupted downloads carry on where they stopped.</span></div></li>
+        <li id="stepApproved"><i></i><div><b>Speed check</b><span id="benchNote">One timed render, to be sure nobody is left waiting.</span></div></li>
+      </ol>
+      <button class="ghost wide" id="resume" hidden>Carry on with setup</button>
+    </section>
+
+    <div class="stack">
+      <section class="card">
+        <h2>This session</h2>
+        <div class="metrics">
+          <div><span>Images</span><b id="images">0</b></div>
+          <div><span>Earned</span><b id="earned">0 px</b></div>
+          <div><span>Rate</span><b id="rate">—</b></div>
+        </div>
+        <figure class="shot">
+          <img id="preview" alt="">
+          <figcaption id="shotNote">The last picture this machine rendered will appear here.</figcaption>
+        </figure>
+      </section>
+
+      <section class="card">
+        <h2>Free work</h2>
+        <label class="switch">
+          <input type="checkbox" id="allowFree">
+          <span class="slider"></span>
+          <span>Also render for people without pixels</span>
+        </label>
+        <p class="muted" id="freeNote">Free jobs pay nothing and always wait behind paid ones. Nobody's card renders for strangers without this being on.</p>
+      </section>
+    </div>
+  </div>
+
+  <details class="card log">
+    <summary>Details</summary>
+    <dl class="facts">
+      <dt>Machine</dt><dd id="factMachine">—</dd>
+      <dt>Renders on</dt><dd id="factAccelerator">—</dd>
+      <dt>Device</dt><dd id="factDevice">—</dd>
+      <dt>Version</dt><dd id="factVersion">—</dd>
+      <dt>Server</dt><dd id="factApi">—</dd>
+    </dl>
+    <pre id="log">Nothing yet.</pre>
+    <p class="muted">This window is served from this computer only, on 127.0.0.1.</p>
+  </details>
+
+  <p class="notice" id="notice" hidden></p>
+</main>
+
+<script src="/ui/app.js"></script>
+</body>
+</html>

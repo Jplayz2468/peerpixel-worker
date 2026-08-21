@@ -13,7 +13,7 @@ import json
 import socket as sockets
 import time
 
-from . import api, compare, config, dashboard_state, relay, ui
+from . import api, compare, config, events, preview, relay, ui
 
 #: What this install speaks. Version 1 rendered 512px and posted results over
 #: HTTP; it knew nothing of operations, transient drafts or reference images.
@@ -86,8 +86,21 @@ def await_settlement(link, job_id: str, *, timeout: float = 30.0, clock=time.mon
     return 0
 
 
+def asked_to_stop() -> bool:
+    """Has somebody pressed stop while this machine was mid-render?
+
+    A render that is already running is a picture somebody is waiting for and
+    has been charged for, so stopping abandons nothing: the flag is read
+    between jobs, the current one finishes and is delivered, and then the
+    worker exits. Killing the process outright is still available for a worker
+    that is merely idle, where there is nothing to abandon.
+    """
+    return bool(config.read().get("stopAfterJob"))
+
+
 def run(renderer, once: bool = False) -> int:
     settings = config.read()
+    config.write(stopAfterJob=False)
     if not settings.get("token"):
         raise SystemExit("this machine is not paired yet - run: peerpixel pair CODE")
 
@@ -100,17 +113,32 @@ def run(renderer, once: bool = False) -> int:
     earned_pixels = 0.0
 
     def publish(**patch):
-        try:
-            dashboard_state.publish(patch)
-        except OSError:
-            pass
+        """Everything the app shows about this worker, over the pipe.
+
+        A no-op when nobody is listening, which is the headless case: the panel
+        in `ui.py` is what a terminal reads.
+        """
+        events.emit("state", **patch)
+
+    def bar(name: str, estimates: dict | None = None):
+        events.emit("plan", name=name, **({"estimates": estimates} if estimates else {}))
 
     publish(phase="loading", connected=False, prompt="", step=0, steps=0,
             elapsedSeconds=0, images=0, earnedPixels=0, pixelsPerHour=None)
     # Loading a 4B model prints as it goes and takes tens of seconds. Get it
-    # over with before the panel takes over the bottom of the screen.
+    # over with before the panel takes over the bottom of the screen. It is
+    # also the longest unexplained wait in the whole app, so it gets a phase.
+    bar("startup")
+    events.phase("load")
     renderer.warm()
+    events.phase("connect")
     publish(phase="connecting")
+
+    # How long a step takes here, so a job's bar is calibrated from its very
+    # first frame rather than after enough steps to measure. The benchmark
+    # timed four steps at master resolution, which is exactly this number.
+    bench_ms = settings.get("benchMs")
+    per_step = [float(bench_ms) / 4000.0 if bench_ms else 1.5]
 
     status = ui.Status(
         api=config.API,
@@ -129,6 +157,7 @@ def run(renderer, once: bool = False) -> int:
         status.step, status.steps = done, total
         publish(step=done, steps=total,
                 elapsedSeconds=round(time.monotonic() - status.job_started, 1))
+        events.progress(done, total, detail=f"step {done} of {total}")
         current = time.monotonic()
         if active_link[0] and (done >= total or current - progress_sent_at[0] >= 0.5):
             try:
@@ -164,6 +193,7 @@ def run(renderer, once: bool = False) -> int:
                     status.idle()
                     publish(phase="online", connected=True, prompt="", step=0, steps=0,
                             elapsedSeconds=0)
+                    events.done(connected=True)
                     display.event(f"connected to {config.API}")
                     last_beat = time.monotonic()
 
@@ -173,6 +203,9 @@ def run(renderer, once: bool = False) -> int:
                             # and the idle clock keep moving while nothing comes.
                             raw = link.recv(timeout=TICK)
                         except TimeoutError:
+                            if asked_to_stop():
+                                display.event("stopping, as asked")
+                                return status.images
                             if should_unload_model(status.idle_since, time.monotonic(),
                                                    loaded=getattr(renderer, "pipe", None) is not None):
                                 renderer.unload()
@@ -194,11 +227,15 @@ def run(renderer, once: bool = False) -> int:
                         operation = job.get("operation", "master")
                         active_link[1:] = [job["id"]]
                         progress_sent_at[0] = 0.0
+                        steps_asked = int(job.get("steps", 0)) or 1
+                        bar("job", {"job.render": per_step[0] * steps_asked})
                         if getattr(renderer, "pipe", None) is None:
+                            events.phase("load")
                             publish(phase="loading", connected=True, prompt=job["prompt"])
                             renderer.warm()
                             publish(modelLoaded=True)
                         status.begin(job["prompt"], int(job.get("steps", 0)))
+                        events.phase("render", detail=job["prompt"][:120])
                         publish(phase="rendering", connected=True, prompt=job["prompt"],
                                 step=0, steps=int(job.get("steps", 0)), elapsedSeconds=0)
                         display.event(
@@ -213,6 +250,7 @@ def run(renderer, once: bool = False) -> int:
                             # either end: the bytes are used and dropped.
                             reference = None
                             if job.get("reference"):
+                                events.phase("wait")
                                 publish(phase="rendering", connected=True,
                                         prompt=job["prompt"], step=0,
                                         steps=int(job.get("steps", 0)))
@@ -224,6 +262,7 @@ def run(renderer, once: bool = False) -> int:
                                     raise RuntimeError(
                                         "the browser never sent the draft to render from"
                                     )
+                                events.phase("render", detail=job["prompt"][:120])
 
                             if operation == "verify":
                                 # A check is preemptible: the moment real work
@@ -243,6 +282,7 @@ def run(renderer, once: bool = False) -> int:
                                 subject = api.verify_asset(job["id"], "subject")
                                 measurements = compare.compare(subject, jpeg)
                                 measurements["image"] = base64.b64encode(jpeg).decode()
+                                events.phase("deliver")
                                 api.submit_verification(job["id"], measurements)
                                 display.event(
                                     f"checked {job['id'][:6]}  "
@@ -254,13 +294,20 @@ def run(renderer, once: bool = False) -> int:
                                 status.finish(earned)
                                 publish(phase="online", connected=True, prompt="", step=0,
                                         steps=0, elapsedSeconds=0)
+                                events.done(images=status.images)
                                 last_beat = time.monotonic()
                                 if once:
                                     return status.images
                                 continue
 
                             jpeg = renderer.render(job, on_step=stepped, reference=reference)
-                            dashboard_state.save_preview(jpeg)
+                            events.phase("deliver")
+                            per_step[0] = max(
+                                0.05, (time.monotonic() - status.job_started) / steps_asked)
+                            try:
+                                preview.save(jpeg)
+                            except OSError:
+                                pass  # a full disk costs a thumbnail, not a render
 
                             if job.get("transient"):
                                 # A draft has no permanent home. It goes back
@@ -288,11 +335,12 @@ def run(renderer, once: bool = False) -> int:
                                     earnedPixels=earned_pixels, pixelsPerHour=rate,
                                     lastEarnedPixels=earned,
                                     lastImageAt=int(time.time() * 1000))
+                            events.done(images=status.images, earnedPixels=earned_pixels)
                             display.event(
                                 f"done in {time.time() - started:.1f}s  +{earned:g} pixels"
                             )
                             last_beat = time.monotonic()
-                            if once:
+                            if once or asked_to_stop():
                                 return status.images
                         except Exception as error:  # noqa: BLE001 - one bad job must not end the run
                             status.idle()
@@ -305,6 +353,8 @@ def run(renderer, once: bool = False) -> int:
             except Exception as error:  # noqa: BLE001 - every disconnect is temporary
                 active_link[0] = None
                 status.state = "offline"
+                bar("startup")
+                events.phase("connect", detail=f"retrying in {backoff}s")
                 publish(phase="offline", connected=False)
                 display.event(f"disconnected ({error}) - retrying in {backoff}s")
                 time.sleep(backoff)

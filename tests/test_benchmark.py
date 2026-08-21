@@ -13,8 +13,11 @@ class FakeRenderer:
     def warm(self):
         self.warmed += 1
 
-    def render(self, job):
+    def render(self, job, on_step=None):
         self.jobs.append(job)
+        if on_step:
+            for step in range(1, job["steps"] + 1):
+                on_step(step, job["steps"])
         return b"jpeg"
 
 
@@ -42,6 +45,24 @@ class BenchmarkTests(unittest.TestCase):
         self.assertNotIn("width", renderer.jobs[1])
         self.assertEqual(submitted, [(12345, "test gpu")])
         self.assertEqual(result[0], 12345)
+
+    def test_the_bar_is_told_when_the_warm_up_ends(self):
+        """Otherwise it fills, resets and fills again, which reads as a failure."""
+        renderer = FakeRenderer()
+        ticks = iter((100.0, 101.0))
+        seen = []
+
+        run_benchmark(
+            renderer,
+            submit=lambda ms, accelerator: {"approved": True},
+            clock=lambda: next(ticks),
+            on_step=lambda done, total: seen.append(("step", done, total)),
+            between=lambda: seen.append(("between",)),
+        )
+
+        self.assertEqual(seen.count(("between",)), 1)
+        self.assertEqual(seen.index(("between",)), 4, "after the first four steps")
+        self.assertEqual(len(seen), 9)
 
 
 if __name__ == "__main__":

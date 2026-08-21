@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=PeerPixel
+Comment=Render images for people whose machines cannot
+Exec=sh -c '"$(dirname "%k")/PeerPixel.sh"'
+Terminal=true
+Categories=Graphics;Network;

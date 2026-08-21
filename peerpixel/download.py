@@ -18,17 +18,28 @@ import os
 import threading
 from pathlib import Path
 
+from . import events
 from .render import MODEL, REVISION
 from .ui import Progress, human
+from .weights import repo_dir as _repo_dir_of
 
 POLL = 0.5  # seconds between disk measurements
 
 
 def _repo_dir() -> Path:
-    """Where the Hub keeps this repo: <cache>/models--org--name/."""
-    from huggingface_hub import constants
+    """Where the Hub keeps this repo: <cache>/models--org--name/.
 
-    return Path(constants.HF_HUB_CACHE) / ("models--" + MODEL.replace("/", "--"))
+    Asked of the real library when it is here, because the library is the
+    authority. `weights.py` works the same answer out from the environment for
+    the app, which has no library; if these two ever disagree the app would
+    offer to download something that is already on the disk.
+    """
+    try:
+        from huggingface_hub import constants
+
+        return Path(constants.HF_HUB_CACHE) / ("models--" + MODEL.replace("/", "--"))
+    except ImportError:
+        return _repo_dir_of(MODEL)
 
 
 def _plan() -> tuple[list[str], int, str]:
@@ -80,6 +91,7 @@ def ensure() -> str:
 
     disable_progress_bars()  # its per-file bars would fight with our one line
 
+    events.phase("plan")
     try:
         files, total, sha = _plan()
     except Exception as error:  # noqa: BLE001
@@ -96,9 +108,11 @@ def ensure() -> str:
     # Presence, not byte count: a stray byte of difference must not make every
     # run announce a download it is not going to do.
     if all((snapshot / name).is_file() for name in files):
+        events.phase("check")
         return str(snapshot)
 
     done = _measure(root, sha, files)
+    events.phase("fetch", detail=f"{human(max(total - done, 0))} to fetch")
     print(f"downloading {MODEL} - {human(max(total - done, 0))} to fetch", flush=True)
     progress = Progress(total, done)
     outcome: dict = {}
@@ -115,7 +129,10 @@ def ensure() -> str:
     thread.start()
     try:
         while thread.is_alive():
-            progress.update(_measure(root, sha, files))
+            measured = _measure(root, sha, files)
+            progress.update(measured)
+            events.progress(measured, total,
+                            detail=f"{human(measured)} of {human(total)}")
             thread.join(POLL)
     except BaseException:
         progress.close()
@@ -125,4 +142,5 @@ def ensure() -> str:
         progress.close()
         raise outcome["error"]
     progress.close(total or _measure(root, sha, files))
+    events.phase("check")
     return outcome["path"]

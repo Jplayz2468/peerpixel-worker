@@ -1,4 +1,4 @@
-"""Steady-state benchmark shared by the terminal and local dashboard."""
+"""Steady-state benchmark shared by the terminal and the app."""
 from __future__ import annotations
 
 import time
@@ -21,11 +21,20 @@ JOB = {
 }
 
 
-def run_benchmark(renderer, *, submit=api.submit_bench, clock=time.time):
-    """Warm kernels once, then time an identical steady-state render."""
+def run_benchmark(renderer, *, submit=api.submit_bench, clock=time.time,
+                  on_step=None, between=None):
+    """Warm kernels once, then time an identical steady-state render.
+
+    Two renders, and the bar has to cross both. `between` is called when the
+    first finishes so the display can move to its second phase -- otherwise the
+    bar fills, resets to nothing, and fills again, which reads as the benchmark
+    having failed and started over.
+    """
     renderer.warm()
-    renderer.render(JOB)
+    renderer.render(JOB, on_step=on_step)
+    if between is not None:
+        between()
     started = clock()
-    renderer.render(JOB)
+    renderer.render(JOB, on_step=on_step)
     ms = round((clock() - started) * 1000)
     return ms, submit(ms, renderer.accelerator)

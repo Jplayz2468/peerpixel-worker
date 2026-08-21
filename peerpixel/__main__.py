@@ -1,13 +1,19 @@
 """peerpixel - render for people whose machines cannot.
 
+Most people never type any of this. They unzip the folder, double-click the
+launcher, and everything below happens in a window with a progress bar on it.
+These exist because a machine in a cupboard has no window, and because when
+something goes wrong it is far easier to debug one command than a whole app.
+
+    peerpixel app           the window: setup, updates and running (the default)
     peerpixel pair CODE     link this machine to your account
-    peerpixel dashboard     open the local setup and status page
     peerpixel download      fetch the model (~15 GB) ahead of time
     peerpixel bench         prove it is fast enough
     peerpixel run           start rendering (Ctrl-C to stop)
     peerpixel run --free    the same, and take unpaid work too
     peerpixel free on|off   take unpaid work from people without an account
     peerpixel status        pool and device state
+    peerpixel update        fetch and install a newer worker
 """
 from __future__ import annotations
 
@@ -16,7 +22,7 @@ import socket
 import sys
 import time
 
-from . import api, config, dashboard_state, download, update
+from . import api, config, download, events, updater
 from .benchmark import run_benchmark
 from .render import Renderer
 from .worker import run as run_worker
@@ -37,6 +43,19 @@ def machine() -> dict:
     }
 
 
+def cmd_app(argv):
+    from .app import serve
+
+    serve(show_window=not {"--no-window", "--no-browser"} & set(argv))
+
+
+def cmd_accelerator(_argv):
+    """What this machine renders on. Asked by the app, which cannot import torch."""
+    from .render import describe_accelerator
+
+    print(describe_accelerator())
+
+
 def cmd_pair(argv):
     if not argv:
         raise SystemExit("usage: peerpixel pair CODE   (get one from peerpixel.cc)")
@@ -44,47 +63,55 @@ def cmd_pair(argv):
     # being free, and the machine somebody is pairing is often already busy.
     from .render import describe_accelerator
 
-    result = api.pair(argv[0].upper(), {**machine(), "accelerator": describe_accelerator()})
-    config.write(deviceId=result["deviceId"], token=result["token"], api=config.API)
+    name = describe_accelerator()
+    result = api.pair(argv[0].upper(), {**machine(), "accelerator": name})
+    config.write(deviceId=result["deviceId"], token=result["token"], api=config.API,
+                 accelerator=name)
     print(f"Paired as {machine()['name']}.")
     print(f"Saved to {config.FILE}")
     print("Next: peerpixel bench")
 
 
 def cmd_download(_argv):
-    dashboard_state.publish({"phase": "downloading"})
-    try:
-        print(f"Model ready at {download.ensure()}")
-        dashboard_state.publish({"phase": "model-ready"})
-    except BaseException:
-        dashboard_state.publish({"phase": "download-failed"})
-        raise
-
-
-def cmd_dashboard(_argv):
-    from .dashboard import serve
-
-    serve()
+    print(f"Model ready at {download.ensure()}")
+    events.done(model=True)
 
 
 def cmd_bench(_argv):
-    dashboard_state.publish({"phase": "loading", "step": 0, "steps": 2})
+    events.phase("model")
     download.ensure()
+    events.phase("load")
     renderer = Renderer()
-    print(f"Warming up {renderer.accelerator}...")
-    dashboard_state.publish({"phase": "benchmarking", "step": 0, "steps": 2})
+    print(f"Warming up {renderer.accelerator}...", flush=True)
+    renderer.warm()
+
+    # Two renders, and the bar has to cross both of them rather than filling up
+    # and then doing it all again. The phase it is in decides which half.
+    phases = iter(("warm", "measure"))
+    current = {"name": next(phases)}
+    events.phase(current["name"])
+
+    def stepped(done, total):
+        events.progress(done, total, detail=f"step {done} of {total}")
+
+    def next_phase():
+        current["name"] = next(phases, current["name"])
+        events.phase(current["name"])
+
     try:
-        ms, result = run_benchmark(renderer)
-    except BaseException:
-        dashboard_state.publish({"phase": "benchmark-failed"})
+        ms, result = run_benchmark(renderer, on_step=stepped, between=next_phase)
+    except BaseException as error:
+        events.failed(str(error))
         raise
-    config.write(benchMs=ms, approved=bool(result.get("approved")))
-    dashboard_state.publish({"phase": "ready" if result.get("approved") else "benchmark-failed",
-                             "step": 2, "steps": 2})
+    events.phase("submit")
+    config.write(benchMs=ms, approved=bool(result.get("approved")),
+                 accelerator=renderer.accelerator)
     print(f"{ms / 1000:.1f}s for 4 steps (limit {result['limitMs'] / 1000:.0f}s)")
     if result["approved"]:
+        events.done(approved=True, ms=ms)
         print("Approved. Run `peerpixel run` to start earning.")
     else:
+        events.failed("This machine is too slow to keep people waiting.")
         raise SystemExit("Not approved: this machine is too slow to keep people waiting.")
 
 
@@ -119,6 +146,10 @@ def cmd_run(argv):
     run_worker(Renderer(), once="--once" in argv)
 
 
+def cmd_update(_argv):
+    updater.apply()
+
+
 def cmd_status(_argv):
     settings = config.read()
     free = bool(settings.get("allowFree"))
@@ -138,26 +169,50 @@ def cmd_status(_argv):
 
 
 COMMANDS = {
+    "app": cmd_app,
+    "dashboard": cmd_app,      # what the old README called it
     "pair": cmd_pair,
-    "dashboard": cmd_dashboard,
     "download": cmd_download,
     "bench": cmd_bench,
     "free": cmd_free,
     "run": cmd_run,
     "status": cmd_status,
+    "update": cmd_update,
+    "apply-update": cmd_update,
+    "accelerator": cmd_accelerator,
 }
+
+#: Commands the app runs as children. They talk over the pipe and must not be
+#: interrupted by a "there is a newer version" line addressed to a person.
+QUIET = {"app", "dashboard", "accelerator", "apply-update"}
+
+
+def notice() -> None:
+    """Tell a terminal user that a newer worker exists. Never installs anything.
+
+    Silent on every failure. Being offline, behind a proxy or rate limited by
+    GitHub is not a reason to delay somebody's render by a single second.
+    """
+    latest = updater.latest(timeout=2.0)
+    here = updater.installed()
+    if latest and updater.newer(latest, here):
+        print(f"Update available: {latest} (you have {here}) - run: peerpixel update")
 
 
 def main():
     argv = sys.argv[1:]
-    handler = COMMANDS.get(argv[0]) if argv else None
+    # No arguments is somebody who double-clicked something. Open the window.
+    name = argv[0] if argv else "app"
+    handler = COMMANDS.get(name)
     if not handler:
         print(__doc__)
-        raise SystemExit(0 if not argv else 1)
-    update.check()
+        raise SystemExit(1)
+    if name not in QUIET and not events.ENABLED:
+        notice()
     try:
         handler(argv[1:])
     except api.ApiError as error:
+        events.failed(str(error))
         raise SystemExit(str(error)) from None
 
 

@@ -14,6 +14,13 @@ dependencies = [
   "websockets>=13",
 ]
 
+[project.optional-dependencies]
+# The native window. Installed by the launcher alongside the interpreter that
+# runs the app, rather than into this environment, because the app has to be
+# able to open before this environment exists. Here as well so that
+# `uv run peerpixel app` from a clone gets a real window too.
+window = ["pywebview>=5"]
+
 [project.scripts]
 peerpixel = "peerpixel.__main__:main"
 
@@ -23,3 +30,7 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 managed = true
+
+[tool.hatch.build.targets.wheel]
+# Explicit, so the interface files under peerpixel/ui travel with the package.
+packages = ["peerpixel"]
