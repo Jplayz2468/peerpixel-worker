@@ -234,9 +234,10 @@ class Live:
     the slow thing is doing, including nothing at all, which is the point.
     """
 
-    def __init__(self, tracker, *, heading: str = ""):
+    def __init__(self, tracker, *, heading: str = "", footer=None):
         self.tracker = tracker
         self.heading = heading
+        self.footer = footer
         self.stop = threading.Event()
         self.thread: threading.Thread | None = None
         self.lines = 0
@@ -273,8 +274,9 @@ class Live:
                 return
             self.last_plain = now
             tail = "done" if snapshot.finished else how_long(snapshot.eta_seconds)
+            status = f"  {self.footer()}" if self.footer else ""
             say(f"[{time.strftime('%H:%M:%S')}] {snapshot.percent:.0f}%  "
-                f"{snapshot.label}  {snapshot.detail}  {tail}".rstrip())
+                f"{snapshot.label}  {snapshot.detail}  {tail}{status}".rstrip())
             return
 
         cap = width()
@@ -300,6 +302,8 @@ class Live:
             f"  {colour}{bar(snapshot.fraction, size)}{OFF}",
             f"  {DIM}{under}{OFF}"[:cap + len(DIM) + len(OFF)],
         ]
+        if self.footer:
+            rows.append(f"  {DIM}{self.footer()}{OFF}"[:cap + len(DIM) + len(OFF)])
         out = []
         if not self.opened:
             out.append(HIDE)

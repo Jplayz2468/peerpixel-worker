@@ -568,7 +568,7 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.7.3"
+        runtime = "peerpixel-worker/0.8.0"
         return jpeg, {
             "enhancedPrompt": effective,
             "moderation": moderation,

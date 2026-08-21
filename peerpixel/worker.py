@@ -18,6 +18,7 @@ import time
 
 from . import api, compare, config, console, plans, preview, relay, settings
 from .console import DIM, OFF, clock, say, step_line
+from .system_status import SystemStatus
 
 #: What this install speaks, and it must match `PROTOCOL_VERSION` in the
 #: server's `public/generation-policy.mjs`.
@@ -165,6 +166,11 @@ def _bench_per_step() -> float:
         return 1.0
 
 
+def status_line(session: Session, state: str, hardware: SystemStatus) -> str:
+    """The idle line combines worker state with local machine health."""
+    return f"{session.line(state)} · {hardware.line()}"
+
+
 def run(renderer, once: bool = False) -> int:
     saved = config.read()
     config.write(stopAfterJob=False)
@@ -177,13 +183,14 @@ def run(renderer, once: bool = False) -> int:
         raise SystemExit("missing dependency: run `peerpixel setup`") from None
 
     session = Session()
+    hardware = SystemStatus(renderer)
     state = ["connecting"]
     prompt = [""]
 
     # Loading a 4B model takes tens of seconds and says nothing while it does.
     # It gets a bar for the same reason everything else here does.
     start = plans.tracker("start")
-    with console.Live(start, heading="Starting the worker"):
+    with console.Live(start, heading="Starting the worker", footer=hardware.line):
         start.begin("load")
         renderer.warm()
         start.note(renderer.accelerator)
@@ -199,7 +206,7 @@ def run(renderer, once: bool = False) -> int:
     sent_at = [0.0]
 
     def status() -> str:
-        return session.line(state[0])
+        return status_line(session, state[0], hardware)
 
     try:
         while True:
@@ -250,7 +257,7 @@ def run(renderer, once: bool = False) -> int:
 
                             idle.__exit__(None, None, None)
                             _do_job(link, message["job"], renderer, session,
-                                    link_ref, sent_at, prompt)
+                                    link_ref, sent_at, prompt, hardware)
                             last_beat = time.monotonic()
                             if once or asked_to_stop():
                                 return session.images
@@ -275,7 +282,8 @@ def run(renderer, once: bool = False) -> int:
     return session.images
 
 
-def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prompt) -> float:
+def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prompt,
+            hardware: SystemStatus | None = None) -> float:
     """One job, start to finish, under one bar.
 
     Every exit from here goes back to the dispatcher: a finished result, or a
@@ -306,7 +314,8 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
 
     heading = f"{operation}  {DIM}{job['prompt'][:60]}{OFF}"
     try:
-        with console.Live(bar, heading=heading):
+        with console.Live(bar, heading=heading,
+                          footer=hardware.line if hardware else None):
             if getattr(renderer, "pipe", None) is None:
                 bar.begin("load")
                 renderer.warm()
@@ -361,7 +370,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                             "attestations": [{"operation": "upscale",
                                 "inputDigest": hashlib.sha256(source).hexdigest(),
                                 "outputDigest": hashlib.sha256(jpeg).hexdigest(),
-                                "runtimeVersion": "peerpixel-worker/0.7.3"}]}
+                                "runtimeVersion": "peerpixel-worker/0.8.0"}]}
             elif hasattr(renderer, "generate_job"):
                 jpeg, evidence = renderer.generate_job(job, **render_options)
             else:  # small test doubles and third-party renderer integrations

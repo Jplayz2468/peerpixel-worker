@@ -90,6 +90,15 @@ class ProtocolVersionTests(unittest.TestCase):
         self.assertFalse(worker.should_unload_model(100, 100 + 7199, loaded=True))
         self.assertTrue(worker.should_unload_model(100, 100 + 7200, loaded=True))
 
+    def test_idle_status_keeps_session_and_hardware_visible_together(self):
+        session = type("Session", (), {"line": lambda self, state: f"{state} · 2 images"})()
+        hardware = type("Hardware", (), {"line": lambda self: "CPU 12% · RAM 4/8 GB"})()
+
+        self.assertEqual(
+            worker.status_line(session, "online, waiting for work", hardware),
+            "online, waiting for work · 2 images · CPU 12% · RAM 4/8 GB",
+        )
+
 
 class DraftSettlementTests(unittest.TestCase):
     def test_an_accepted_draft_reports_what_it_earned(self):

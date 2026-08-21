@@ -1,6 +1,6 @@
 [project]
 name = "peerpixel"
-version = "0.7.3"
+version = "0.8.0"
 description = "Render FLUX.2 Klein for people whose machines cannot."
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -11,6 +11,7 @@ dependencies = [
   "peft>=0.17",
   "safetensors>=0.4",
   "pillow>=10",
+  "psutil>=6",
   "huggingface-hub>=0.30",
   "websockets>=13",
   "zstandard>=0.23",
