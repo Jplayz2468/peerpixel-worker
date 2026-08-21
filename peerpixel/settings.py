@@ -73,6 +73,14 @@ SETTINGS: tuple[Setting, ...] = (
         "A loaded model holds several gigabytes. Dropping it frees them and "
         "costs the next job a reload. 0 keeps it forever."),
     Setting(
+        "update", "What to do when a newer PeerPixel is out",
+        ("auto", "notify", "off"), "auto",
+        "auto installs it when you start PeerPixel and restarts into it, which "
+        "takes a few seconds and never happens mid-render. notify prints a line "
+        "and leaves it to you. off never looks. A machine left running for "
+        "months on a version the network has stopped giving work to is the "
+        "thing auto exists to prevent."),
+    Setting(
         "colour", "Colour and animation in this terminal", ("auto", "off"), "auto",
         "auto follows the terminal, NO_COLOR and whether output is a pipe."),
     Setting(
@@ -85,7 +93,8 @@ BY_NAME = {setting.name: setting for setting in SETTINGS}
 #: What each setting is called in the config file, where the names are older
 #: than this table and are not worth a migration.
 STORED = {"free": "allowFree", "dtype": "dtype", "keep-last": "keepLast",
-          "unload-after": "unloadAfterMinutes", "colour": "colour", "api": "api"}
+          "unload-after": "unloadAfterMinutes", "colour": "colour", "api": "api",
+          "update": "updateMode"}
 
 
 def current() -> list[tuple[Setting, str, str]]:
@@ -162,3 +171,8 @@ def unload_seconds() -> float:
 
 def keep_last() -> bool:
     return bool(config.read().get("keepLast", True))
+
+
+def update_mode() -> str:
+    value = str(config.read().get("updateMode") or "auto").lower()
+    return value if value in ("auto", "notify", "off") else "auto"

@@ -135,3 +135,20 @@ def use_venv() -> None:
 
         raise SystemExit(subprocess.run(argv, cwd=str(ROOT)).returncode)
     os.execv(str(python), argv)
+
+
+def restart() -> None:
+    """Run this command again, on the code that is now on disk.
+
+    An update replaces this package's files underneath the process running it,
+    and everything already imported is still the old version. Re-running is the
+    only honest way to become the new one, and it keeps the arguments, the
+    environment and the terminal it was started in.
+    """
+    python = venv_python() if venv_python().exists() else Path(sys.executable)
+    argv = [str(python), "-m", "peerpixel", *sys.argv[1:]]
+    if os.name == "nt":
+        import subprocess
+
+        raise SystemExit(subprocess.run(argv, cwd=str(ROOT)).returncode)
+    os.execv(str(python), argv)

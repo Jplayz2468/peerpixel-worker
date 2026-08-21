@@ -258,8 +258,51 @@ def offer_free_work() -> None:
 
 # -- commands -----------------------------------------------------------------
 
+#: Set on the way into a restart, so a release whose tag runs ahead of its own
+#: version cannot make this update, restart, still look old, and update again.
+UPDATED = "PEERPIXEL_UPDATED"
+
+
+def self_update() -> None:
+    """Install a newer PeerPixel before starting, if there is one.
+
+    Only on the way in. A worker that has already picked up a job is holding a
+    picture somebody paid for, and no amount of being out of date is worth
+    dropping that -- so this is the one moment it can happen, and it is over
+    before the first job is claimed.
+
+    Silent on every failure. Being offline, behind a proxy or rate limited by
+    GitHub is not a reason to refuse to render.
+    """
+    mode = settings.update_mode()
+    if mode == "off":
+        return
+    with console.Line(lambda: "checking for a newer PeerPixel"):
+        latest = updater.latest(timeout=5.0)
+    here = updater.installed()
+    if not latest or not updater.newer(latest, here):
+        return
+    if os.environ.get(UPDATED) == latest:
+        note(f"{latest} says it is newer than {here}, and installing it did not "
+             f"change that. Staying on {here}.")
+        return
+    if mode == "notify":
+        note(f"{latest} is out; you have {here}. Install it with: peerpixel update")
+        return
+
+    result = run_plan("update", updater.apply)
+    if not result.get("updated"):
+        return
+    step_line(True, f"Updated to {result['version']}.")
+    note("Restarting into it.")
+    os.environ[UPDATED] = str(result["version"])
+    runtime.restart()
+
+
 def cmd_start(argv: list[str]) -> None:
     """Set up if needed, then render until stopped."""
+    if "--no-update" not in argv:
+        self_update()
     if not onboard(interactive=sys.stdin.isatty() and "--yes" not in argv):
         raise SystemExit(1)
     need_libraries()
@@ -441,7 +484,7 @@ def cmd_help(_argv: list[str]) -> None:
 
 
 HELP = (
-    ("peerpixel", "set up if needed, then render until stopped"),
+    ("peerpixel", "update, set up if needed, then render until stopped"),
     ("peerpixel setup", "the guided first run, on its own"),
     ("peerpixel pair CODE", "link this machine to your account"),
     ("peerpixel download", "fetch the model ahead of time"),
