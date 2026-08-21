@@ -1,6 +1,7 @@
 import unittest
 
-from peerpixel.benchmark import run_benchmark
+from peerpixel.benchmark import BENCH_STEPS, JOB, run_benchmark
+from peerpixel.render import NETWORK_OPERATIONS, OPERATIONS
 
 
 class FakeRenderer:
@@ -15,9 +16,10 @@ class FakeRenderer:
 
     def render(self, job, on_step=None):
         self.jobs.append(job)
+        steps = OPERATIONS[job["operation"]]["steps"]
         if on_step:
-            for step in range(1, job["steps"] + 1):
-                on_step(step, job["steps"])
+            for step in range(1, steps + 1):
+                on_step(step, steps)
         return b"jpeg"
 
 
@@ -35,16 +37,31 @@ class BenchmarkTests(unittest.TestCase):
 
         self.assertEqual(renderer.warmed, 1)
         self.assertEqual(len(renderer.jobs), 2)
-        self.assertEqual(renderer.jobs[0]["steps"], 4)
-        self.assertEqual(renderer.jobs[1]["steps"], 4)
-        # Master resolution so a card that cannot hold a real render fails here
-        # rather than on somebody's paid job, but nowhere near the master step
-        # count: a fifty-step admission test would take minutes and be judged
-        # against a limit written for a four-step one.
-        self.assertEqual(renderer.jobs[1]["operation"], "master")
+        self.assertEqual(renderer.jobs[1]["operation"], "bench")
         self.assertNotIn("width", renderer.jobs[1])
         self.assertEqual(submitted, [(12345, "test gpu")])
         self.assertEqual(result[0], 12345)
+
+    def test_the_benchmark_runs_the_number_of_steps_it_claims_to(self):
+        """It did not, and nothing said so.
+
+        Step count is pinned by the operation and ignored from the payload, so
+        that a job cannot talk a machine into rendering fewer steps than it was
+        paid for. The benchmark asked for four steps as a payload field, which
+        that rule quietly discarded: it ran fifty, took twelve times as long as
+        intended, and was then timed against a limit written for four.
+        """
+        from peerpixel.render import operation_of
+
+        spec = operation_of(JOB)
+        self.assertEqual(spec["steps"], BENCH_STEPS)
+        # Still master resolution: that is what catches a card which cannot
+        # hold a real render, and it is the whole reason for the size.
+        self.assertEqual(spec["width"], OPERATIONS["master"]["width"])
+
+    def test_the_network_can_never_send_a_benchmark(self):
+        # Four steps of work submitted for a fifty-step price.
+        self.assertNotIn("bench", NETWORK_OPERATIONS)
 
     def test_the_bar_is_told_when_the_warm_up_ends(self):
         """Otherwise it fills, resets and fills again, which reads as a failure."""
@@ -61,8 +78,9 @@ class BenchmarkTests(unittest.TestCase):
         )
 
         self.assertEqual(seen.count(("between",)), 1)
-        self.assertEqual(seen.index(("between",)), 4, "after the first four steps")
-        self.assertEqual(len(seen), 9)
+        self.assertEqual(seen.index(("between",)), BENCH_STEPS,
+                         "after the first render, not part way through it")
+        self.assertEqual(len(seen), BENCH_STEPS * 2 + 1)
 
 
 if __name__ == "__main__":

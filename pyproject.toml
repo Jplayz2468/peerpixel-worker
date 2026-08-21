@@ -1,6 +1,6 @@
 [project]
 name = "peerpixel"
-version = "0.2.0"
+version = "0.3.0"
 description = "Render FLUX.2 Klein for people whose machines cannot."
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -13,13 +13,6 @@ dependencies = [
   "huggingface-hub>=0.30",
   "websockets>=13",
 ]
-
-[project.optional-dependencies]
-# The native window. Installed by the launcher alongside the interpreter that
-# runs the app, rather than into this environment, because the app has to be
-# able to open before this environment exists. Here as well so that
-# `uv run peerpixel app` from a clone gets a real window too.
-window = ["pywebview>=5"]
 
 [project.scripts]
 peerpixel = "peerpixel.__main__:main"

@@ -26,7 +26,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -34,7 +33,6 @@ import zipfile
 from importlib import metadata
 from pathlib import Path
 
-from . import events
 from .api import USER_AGENT
 from .runtime import ROOT
 
@@ -179,79 +177,56 @@ def swap(source: Path, target: Path = ROOT) -> None:
                 destination.chmod(destination.stat().st_mode | 0o111)
 
 
-def relaunch() -> None:
-    """Start the replacement and let this one go.
+def apply(bar) -> dict:
+    """The whole update, under the bar it was handed.
 
-    Detached on purpose: the new app must outlive the process that started it,
-    and it needs the port this one is about to release. The window in the
-    browser is polling either way and simply reconnects.
+    Returns what happened rather than printing it: the caller in `cli.py` owns
+    the terminal while a bar is on it, and something writing to the same lines
+    from underneath would tear the drawing apart.
     """
-    argv = [sys.executable, "-m", "peerpixel", "app"]
-    kwargs = {"cwd": str(ROOT), "close_fds": True}
-    if os.name == "nt":
-        kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_GROUP
-    else:
-        kwargs["start_new_session"] = True
-    subprocess.Popen(argv, **kwargs)
-
-
-def apply() -> None:
-    """The whole update, narrated. Runs as a child of the app; see tasks.py."""
-    events.phase("look")
+    bar.begin("look")
     current = installed()
     if is_clone():
-        _git_update(current)
-        return
+        return _git_update(bar, current)
+
     data = release()
     tag = str(data.get("tag_name") or "")
     if not tag or not newer(tag, current):
-        events.note("Already up to date.")
-        events.done(updated=False, version=current)
-        return
+        return {"updated": False, "version": current}
     url = asset_url(data)
     if not url:
-        events.failed("that release has nothing to download")
-        return
+        raise RuntimeError(f"release {tag} has nothing to download")
 
-    events.phase("fetch", detail=tag)
+    bar.begin("fetch", detail=tag)
     staging = Path(tempfile.mkdtemp(prefix="peerpixel-update-"))
     try:
-        archive = fetch(url, staging / "update.zip",
-                        on_progress=lambda done, total: events.progress(done, total))
-        events.phase("unpack")
-        source = unpack(archive, staging / "tree",
-                        on_progress=lambda done, total: events.progress(done, total))
-        events.phase("install")
+        archive = fetch(url, staging / "update.zip", on_progress=bar.report)
+        bar.begin("unpack")
+        source = unpack(archive, staging / "tree", on_progress=bar.report)
+        bar.begin("install")
         swap(source)
         _sync()
-        events.phase("restart")
-        events.done(updated=True, version=tag)
-        if events.ENABLED:
-            # Started by the app, so the app is what has to come back. From a
-            # terminal, a program that silently opened a browser window would
-            # be a surprise nobody asked for.
-            relaunch()
-        else:
-            print(f"Updated to {tag}. Start PeerPixel again to use it.")
+        return {"updated": True, "version": tag}
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def _git_update(current: str) -> None:
-    events.phase("fetch", detail="git")
+def _git_update(bar, current: str) -> dict:
+    """A clone is updated by Git, fast-forward only.
+
+    Which is what somebody who edited `render.py` would expect: an update that
+    quietly reset their work would be worse than no update at all.
+    """
+    bar.begin("fetch", detail="git")
     out = subprocess.run(["git", "pull", "--ff-only"], cwd=str(ROOT),
                          capture_output=True, text=True)
     if out.returncode != 0:
-        events.failed((out.stderr or out.stdout).strip().splitlines()[-1:][0]
-                      if (out.stderr or out.stdout).strip() else "git pull failed")
-        return
-    events.phase("unpack")
-    events.phase("install")
+        said = (out.stderr or out.stdout).strip().splitlines()
+        raise RuntimeError(said[-1] if said else "git pull --ff-only failed")
+    bar.begin("unpack")
+    bar.begin("install")
     _sync()
-    events.phase("restart")
-    events.done(updated="Already up to date" not in out.stdout, version=installed())
-    if events.ENABLED:
-        relaunch()
+    return {"updated": "Already up to date" not in out.stdout, "version": installed()}
 
 
 def _sync() -> None:

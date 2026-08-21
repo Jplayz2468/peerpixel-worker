@@ -39,6 +39,8 @@ import os
 import subprocess
 import time
 
+from . import config
+
 MODEL = os.environ.get("PEERPIXEL_MODEL", "black-forest-labs/FLUX.2-klein-base-4B")
 
 #: Pinned, because an unpinned repo means two machines that downloaded on
@@ -75,7 +77,43 @@ OPERATIONS = {
     # owns, so it is the same work with the same inputs. Only what happens to
     # the result differs: it is compared rather than delivered.
     "verify": {"width": 512, "height": 512, "steps": 50, "guidance": GUIDANCE},
+    # The admission test, and the only operation the network never sends. It is
+    # master resolution -- that is what catches a card which cannot hold a real
+    # render -- at a step count chosen to be timed rather than looked at.
+    #
+    # It needs its own row because step count is pinned by the operation and
+    # ignored from the payload, deliberately: a job may not talk a machine into
+    # rendering fewer steps than it was paid for. That rule quietly applied to
+    # the benchmark too, so a test written to run four steps ran fifty, took
+    # twelve times as long as it was meant to, and was then judged against a
+    # limit written for four.
+    "bench": {"width": 512, "height": 512, "steps": 4, "guidance": GUIDANCE},
 }
+
+#: What may arrive over the wire. `bench` is local, and a job claiming to be one
+#: would be four steps of work submitted for a fifty-step price.
+NETWORK_OPERATIONS = ("draft", "master", "verify")
+
+
+#: Precision, by name, so a machine that renders badly in one has somewhere to
+#: go. bfloat16 is the default everywhere it works and is what the checkpoint
+#: was trained in; float32 is twice the memory and slower, and is the answer
+#: when a card or a driver produces arithmetic nobody can use.
+def dtype_named(name: str):
+    """A precision by name, or None for "whatever this device would pick".
+
+    Guarded rather than a dict of torch attributes, because this is reached
+    from `pick_device`, which is the one function here that has to survive a
+    torch that is broken, stubbed or half-there.
+    """
+    if name not in ("bfloat16", "float16", "float32"):
+        return None
+    try:
+        import torch
+
+        return getattr(torch, name, None)
+    except Exception:  # noqa: BLE001 - no precision is a fine answer
+        return None
 
 
 def pick_device():
@@ -94,16 +132,18 @@ def pick_device():
     """
     import torch
 
+    asked = dtype_named(os.environ.get("PEERPIXEL_DTYPE") or config.read().get("dtype", ""))
+
     if _cuda_present(torch):
         name = _tried(lambda: torch.cuda.get_device_name(0), "NVIDIA GPU")
         # mem_get_info returns (free, total).
         total = _tried(lambda: torch.cuda.mem_get_info()[1], 0)
         label = f"{name} ({total / 1e9:.0f} GB)" if total else f"{name} (size unknown)"
-        return "cuda", torch.bfloat16, label, total
+        return "cuda", asked or torch.bfloat16, label, total
     if _mps_present(torch):
         total = _tried(lambda: int(subprocess.check_output(["sysctl", "-n", "hw.memsize"])), 0)
-        return "mps", torch.bfloat16, f"Apple silicon ({total / 1e9:.0f} GB unified)", total
-    return "cpu", torch.float32, "CPU", 0
+        return "mps", asked or torch.bfloat16, f"Apple silicon ({total / 1e9:.0f} GB unified)", total
+    return "cpu", asked or torch.float32, "CPU", 0
 
 
 def _tried(probe, fallback):
@@ -200,19 +240,59 @@ def seeded_generator(seed: int):
     return torch.Generator("cpu").manual_seed(int(seed))
 
 
-def _reporter(on_step, asked: int):
-    """Turn the diffusers step hook into (done, total) for the display.
+class _Nonsense(Exception):
+    """The latents came back as NaN. Internal: `render` turns it into an answer."""
 
-    The total comes from the pipeline once it has built its timesteps, and
-    falls back to what was asked for. With reference conditioning the two agree,
-    which is the point of not using img2img here.
+
+class _Watch:
+    """The per-step hook: reports progress, and checks the arithmetic survived.
+
+    The check is the important half. A card, a driver or a precision that this
+    model does not get on with does not raise -- it quietly fills the latents
+    with NaN or infinity, and the decoder turns that into the grey noise with
+    black blotches that looks, to anybody watching, exactly like a bad model.
+    A worker that delivers one of those is paid for a picture nobody can use,
+    and the network has no way to tell it from fraud.
+
+    So it is looked at, once, on the last step, where the damage has certainly
+    accumulated if it is going to. One reduction over the latents costs nothing
+    next to the render that produced them.
     """
 
-    def hook(pipe, index, timestep, kwargs):
-        on_step(index + 1, getattr(pipe, "_num_timesteps", 0) or asked)
+    def __init__(self, on_step, asked: int):
+        self.on_step = on_step
+        self.asked = asked
+        self.broken = False
+
+    def __call__(self, pipe, index, timestep, kwargs):
+        total = getattr(pipe, "_num_timesteps", 0) or self.asked
+        if index + 1 >= total:
+            latents = kwargs.get("latents")
+            if latents is not None:
+                import torch
+
+                self.broken = not bool(torch.isfinite(latents).all())
+        if self.on_step is not None:
+            self.on_step(index + 1, total)
         return kwargs
 
-    return hook
+
+#: What to say when it happens and there is nothing left to try.
+BROKEN = (
+    "this render came out as nan on every precision this machine has. The "
+    "arithmetic is broken rather than the model; run `peerpixel doctor` and "
+    "send what it prints."
+)
+
+#: Precisions to try, in order, when one of them produces nonsense.
+#:
+#: bfloat16 is what the checkpoint was trained in and is right nearly
+#: everywhere. Nearly: bfloat16 on Metal is newer than the machines people run
+#: it on, and on some of them it silently returns NaN instead of numbers --
+#: which decodes to flat grey with a few black specks and looks, to anybody
+#: watching, exactly like a broken model. float16 has been on Metal for years.
+#: float32 is twice the memory and slower and is always correct.
+LADDER = ("bfloat16", "float16", "float32")
 
 
 class Renderer:
@@ -220,7 +300,7 @@ class Renderer:
 
     def __init__(self):
         self.pipe = None
-        self._device, _, self.accelerator, self._total = pick_device()
+        self._device, self._dtype, self.accelerator, self._total = pick_device()
 
     def warm(self):
         """Load once and keep it. A 4B model takes tens of seconds to load."""
@@ -230,7 +310,7 @@ class Renderer:
         from diffusers import Flux2KleinPipeline
 
         device, dtype, label, total = pick_device()
-        self.accelerator = label
+        self._device, self._dtype, self.accelerator = device, dtype, label
         print(f"loading {MODEL} on {label}...", flush=True)
         started = time.time()
         pipe = Flux2KleinPipeline.from_pretrained(MODEL, revision=REVISION, torch_dtype=dtype)
@@ -250,6 +330,27 @@ class Renderer:
         self.pipe = pipe
         print(f"ready in {time.time() - started:.0f}s", flush=True)
 
+    def demote(self) -> str | None:
+        """Give up on this precision and take the next one down. Returns its name.
+
+        Called only when a render came back as NaN, and remembered, because a
+        machine whose bfloat16 is broken has broken bfloat16 tomorrow as well
+        and nobody should have to lose a render a day to rediscover it.
+        """
+        import torch
+
+        names = {torch.bfloat16: "bfloat16", torch.float16: "float16",
+                 torch.float32: "float32"}
+        here = names.get(self._dtype, "bfloat16")
+        rest = LADDER[LADDER.index(here) + 1:] if here in LADDER else ()
+        if not rest:
+            return None
+        chosen = rest[0]
+        config.write(dtype=chosen)
+        os.environ["PEERPIXEL_DTYPE"] = chosen
+        self.unload()
+        return chosen
+
     def unload(self):
         """Release the loaded pipeline after a very long idle spell."""
         if self.pipe is None:
@@ -264,7 +365,30 @@ class Renderer:
         except Exception:  # noqa: BLE001 - cleanup is best effort
             pass
 
-    def render(self, job: dict, on_step=None, reference: bytes | None = None) -> bytes:
+    def render(self, job: dict, on_step=None, reference: bytes | None = None,
+               on_demote=None) -> bytes:
+        """Render, and never hand back something that is not a picture.
+
+        One retry, on the next precision down, because the failure this catches
+        is a property of the machine rather than of the job: if it happens once
+        it happens every time, and the only useful thing to do about it is stop
+        using the precision that caused it.
+        """
+        try:
+            return self._render(job, on_step=on_step, reference=reference)
+        except _Nonsense:
+            chosen = self.demote()
+            if chosen is None:
+                raise RuntimeError(BROKEN) from None
+            if on_demote is not None:
+                on_demote(chosen)
+            print(f"that render came out as nan; retrying in {chosen}", flush=True)
+        try:
+            return self._render(job, on_step=on_step, reference=reference)
+        except _Nonsense:
+            raise RuntimeError(BROKEN) from None
+
+    def _render(self, job: dict, on_step=None, reference: bytes | None = None) -> bytes:
         from PIL import Image
 
         self.warm()
@@ -280,9 +404,7 @@ class Renderer:
             source = Image.open(io.BytesIO(reference))
             conditioning["image"] = [upscale_reference(source, (width, height))]
 
-        watch = {}
-        if on_step is not None:
-            watch["callback_on_step_end"] = _reporter(on_step, steps)
+        watch = _Watch(on_step, steps)
 
         image = self.pipe(
             prompt=job["prompt"],
@@ -295,8 +417,11 @@ class Renderer:
             width=width,
             generator=self.seed_generator(job.get("seed", 0)),
             **conditioning,
-            **watch,
+            callback_on_step_end=watch,
         ).images[0]
+
+        if watch.broken:
+            raise _Nonsense()
 
         buffer = io.BytesIO()
         # A draft is thrown away in a minute and travels over a socket with a

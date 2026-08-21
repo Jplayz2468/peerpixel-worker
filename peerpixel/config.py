@@ -11,12 +11,25 @@ import os
 import stat
 from pathlib import Path
 
-API = os.environ.get("PEERPIXEL_API", "https://peerpixel.cc").rstrip("/")
+DEFAULT_API = "https://peerpixel.cc"
 SESSION = os.environ.get("PEERPIXEL_SESSION", "")
 HOME = Path(os.environ.get("PEERPIXEL_HOME", Path.home() / ".peerpixel"))
 FILE = HOME / "config.json"
 DASHBOARD_STATE_FILE = "dashboard-state.json"
 DASHBOARD_PREVIEW_FILE = "dashboard-preview.jpg"
+
+
+def __getattr__(name: str):
+    """`config.API`, resolved when it is read rather than when this is imported.
+
+    It can come from the environment, from a setting somebody changed a moment
+    ago, or from the default, and a module-level constant frozen at import time
+    would quietly ignore the middle one for the life of the process.
+    """
+    if name == "API":
+        return (os.environ.get("PEERPIXEL_API") or read().get("api")
+                or DEFAULT_API).rstrip("/")
+    raise AttributeError(name)
 
 
 def session() -> str:

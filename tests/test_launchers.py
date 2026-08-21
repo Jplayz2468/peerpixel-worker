@@ -95,10 +95,14 @@ class HandoverTests(unittest.TestCase):
                 self.assertIn("--no-project", read(name))
                 self.assertIn("-m peerpixel", read(name))
 
-    def test_a_native_window_is_attempted_before_anything_else(self):
+    def test_the_launcher_hands_over_to_the_cli_and_nothing_else(self):
+        # There is no window and no localhost server any more. A launcher that
+        # still tried to open one would fail in a console somebody is watching.
         for name in (SHELL, POWERSHELL):
             with self.subTest(script=name):
-                self.assertIn("pywebview", read(name))
+                source = read(name)
+                self.assertNotIn("pywebview", source)
+                self.assertNotIn("webview", source)
 
     def test_the_resolved_uv_is_handed_to_the_app(self):
         # The app installs dependencies and updates itself, and both need uv.
@@ -154,3 +158,19 @@ class OldNamesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoWindowTests(unittest.TestCase):
+    """PeerPixel is a terminal program. Nothing should suggest otherwise."""
+
+    def test_nothing_starts_a_browser_or_binds_a_port(self):
+        for path in (ROOT / "peerpixel").glob("*.py"):
+            source = path.read_text()
+            with self.subTest(module=path.name):
+                self.assertNotIn("webbrowser", source)
+                self.assertNotIn("http.server", source)
+                self.assertNotIn("ThreadingHTTPServer", source)
+
+    def test_the_terminal_stays_open_for_the_person_using_it(self):
+        # A launcher that closed its console would take the program with it.
+        self.assertIn("Terminal=true", read("PeerPixel.desktop"))

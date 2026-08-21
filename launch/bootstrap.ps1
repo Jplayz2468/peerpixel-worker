@@ -93,25 +93,13 @@ if ($LASTEXITCODE -ne 0) {
   }
 }
 
-Write-Host ""
-Write-Host "  Opening PeerPixel." -ForegroundColor Yellow
-Write-Host "  Leave this window alone; closing it closes PeerPixel." -ForegroundColor DarkGray
-Write-Host ""
-
-# --no-project on purpose: this interpreter runs the app, which is standard
-# library only. The rendering libraries are installed by the app itself, into
-# .venv, with a bar on it -- which is only possible because starting up did not
-# need them.
+# --no-project on purpose. This interpreter only has to be able to *start*
+# PeerPixel; the rendering libraries go into .venv, installed by PeerPixel
+# itself with a progress bar on it, and it moves onto that interpreter the
+# moment they are there. See runtime.use_venv.
 $env:PEERPIXEL_UV = $uv
-$command = if ($env:PEERPIXEL_COMMAND) { $env:PEERPIXEL_COMMAND } else { "app" }
-
-# pywebview is what makes this an application rather than a tab: it wraps the
-# interface in WebView2, the same engine Edge uses, in a window this process
-# owns. Small and quick, and uv caches it after the first run. If it will not
-# install, the app falls back to a chromeless browser window.
-& $uv run --no-project --python 3.12 --with pywebview python -c "import webview" *> $null
-if ($LASTEXITCODE -eq 0) {
-  & $uv run --no-project --python 3.12 --with pywebview python -m peerpixel $command @args
+if ($env:PEERPIXEL_COMMAND) {
+  & $uv run --no-project --python 3.12 python -m peerpixel $env:PEERPIXEL_COMMAND @args
 } else {
-  & $uv run --no-project --python 3.12 python -m peerpixel $command @args
+  & $uv run --no-project --python 3.12 python -m peerpixel @args
 }

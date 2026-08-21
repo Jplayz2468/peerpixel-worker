@@ -56,10 +56,14 @@ CEILING = 0.995
 #: numbers are what is displayed, and the clock only shows through in the gaps.
 CREEP_TRUST = 0.85
 
-#: A measured rate under this many seconds old is noise. Downloads ramp, the
-#: first diffusion step carries the whole graph compile, and an ETA computed
-#: from either is a wild number that then has to walk back.
-SETTLE = 3.0
+#: How long a phase runs before the point it measures its rate from is fixed.
+#: Downloads ramp and the first diffusion step carries the whole graph compile,
+#: so a rate taken from the very first moment is a wild number.
+ANCHOR = 1.0
+
+#: And how much has to have happened *since* that point before the rate it
+#: implies is worth believing over the shipped estimate.
+SETTLE = 2.0
 
 #: An ETA is allowed to fall as fast as it likes and to rise only this much per
 #: second of wall clock. A number that jumps around is one nobody reads twice.
@@ -204,7 +208,7 @@ class Tracker:
             self._running.detail = detail
         if self._running.anchor is None:
             elapsed = self.clock() - self._running.started
-            if elapsed >= SETTLE:
+            if elapsed >= ANCHOR:
                 self._running.anchor = (self.clock(), self._measured())
 
     def note(self, detail: str) -> None:

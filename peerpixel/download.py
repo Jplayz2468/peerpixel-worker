@@ -18,9 +18,8 @@ import os
 import threading
 from pathlib import Path
 
-from . import events
 from .render import MODEL, REVISION
-from .ui import Progress, human
+from .console import human
 from .weights import repo_dir as _repo_dir_of
 
 POLL = 0.5  # seconds between disk measurements
@@ -81,8 +80,15 @@ def _measure(root: Path, sha: str, files: list[str]) -> int:
     return done
 
 
-def ensure() -> str:
-    """Make sure the weights are on disk. Returns the folder holding them."""
+def ensure(on_phase=None, on_progress=None) -> str:
+    """Make sure the weights are on disk. Returns the folder holding them.
+
+    The two callbacks are how this reports to whatever is drawing. Both
+    optional, because `ensure` is also called by things that are already
+    drawing something else and only want the weights.
+    """
+    phase = on_phase or (lambda *a, **k: None)
+    report = on_progress or (lambda *a, **k: None)
     if os.path.isdir(MODEL):
         return MODEL  # PEERPIXEL_MODEL points at a local copy
 
@@ -91,7 +97,7 @@ def ensure() -> str:
 
     disable_progress_bars()  # its per-file bars would fight with our one line
 
-    events.phase("plan")
+    phase("plan")
     try:
         files, total, sha = _plan()
     except Exception as error:  # noqa: BLE001
@@ -108,13 +114,11 @@ def ensure() -> str:
     # Presence, not byte count: a stray byte of difference must not make every
     # run announce a download it is not going to do.
     if all((snapshot / name).is_file() for name in files):
-        events.phase("check")
+        phase("check")
         return str(snapshot)
 
     done = _measure(root, sha, files)
-    events.phase("fetch", detail=f"{human(max(total - done, 0))} to fetch")
-    print(f"downloading {MODEL} - {human(max(total - done, 0))} to fetch", flush=True)
-    progress = Progress(total, done)
+    phase("fetch", detail=f"{human(max(total - done, 0))} to fetch")
     outcome: dict = {}
 
     def fetch():
@@ -130,17 +134,12 @@ def ensure() -> str:
     try:
         while thread.is_alive():
             measured = _measure(root, sha, files)
-            progress.update(measured)
-            events.progress(measured, total,
-                            detail=f"{human(measured)} of {human(total)}")
+            report(measured, total, detail=f"{human(measured)} of {human(total)}")
             thread.join(POLL)
     except BaseException:
-        progress.close()
         raise
 
     if "error" in outcome:
-        progress.close()
         raise outcome["error"]
-    progress.close(total or _measure(root, sha, files))
-    events.phase("check")
+    phase("check")
     return outcome["path"]

@@ -3,11 +3,11 @@
 Renders images for people whose computers cannot. The pixels you earn show up
 on your dashboard at [peerpixel.cc](https://peerpixel.cc).
 
-There are two kinds of job. A **draft** is small and quick: somebody is working
-out whether a composition is the one they wanted, and they are asking several
-times. It never becomes a file -- the JPEG goes back down this socket and is
-relayed straight to their browser. A **master** is the full picture,
-conditioned on the draft they chose, which arrives over the same socket.
+There are two kinds of job. A **preview** is small and quick: somebody is
+working out whether a composition is the one they wanted, and they are asking
+several times. It never becomes a file -- the JPEG goes back down this socket
+and is relayed straight to their browser. A **master** is the full picture,
+the one they picked, rendered properly.
 
 Whatever a job costs the person who asked for it is what you are paid for
 rendering it. The current prices and sizes live on the site rather than here, so
@@ -23,75 +23,86 @@ Download the zip, unzip it, and double-click one file.
 | macOS | `PeerPixel.command` |
 | Linux | `PeerPixel.sh`, or `PeerPixel.desktop` |
 
-A window opens and does the rest: a standalone Python, the rendering libraries,
-the model, and a speed check, in the only order they can happen in. Everything
-lands inside this folder or in the usual per-user caches. Nothing is installed
-system-wide and nothing needs administrator rights.
+A terminal opens and walks you through it: a standalone Python, the rendering
+libraries, the model, a pairing code, and a speed check, in the only order they
+can happen in. Everything lands inside this folder or in the usual per-user
+caches. Nothing is installed system-wide and nothing needs administrator rights.
 
-The first run downloads about 18 GB and takes a while. You can close the window
-and come back; every download resumes from where it stopped.
+The first run downloads about 18 GB. You can stop at any point with Ctrl-C and
+run it again; every download resumes from where it stopped and nothing starts
+over.
 
-The one thing the window needs from you is a pairing code, which you get from
-peerpixel.cc. Paste it in and press Pair.
-
-> On macOS, an app downloaded from the internet is quarantined until you have
+> On macOS, anything downloaded from the internet is quarantined until you have
 > opened it once deliberately: right-click `PeerPixel.command` and choose
 > **Open**, then **Open** again. After that it is an ordinary double-click.
 
-## Update
+## Using it
 
-Press **Install it** when the window says a newer version is out, or run
-`./update.sh`. Either way the update is downloaded in full before anything is
-replaced, your `.venv` and any local edits are left alone, and it never happens
-while a render is in flight.
+Double-clicking the launcher again -- or typing `peerpixel` -- sets up anything
+still missing and then renders until you stop it. That is the whole of normal
+use. Everything else is a named command for people who want one.
 
-## The window
+```bash
+peerpixel                # set up if needed, then render until stopped
+peerpixel setup          # the guided first run, on its own
+peerpixel pair CODE      # link this machine to your account
+peerpixel download       # fetch the model ahead of time
+peerpixel bench          # time this machine against the admission limit
+peerpixel status         # this machine, and the state of the pool
+peerpixel settings       # list or change the knobs
+peerpixel doctor         # what this machine is, and a test render
+peerpixel update         # fetch and install a newer worker
+```
 
-It is an application, not a browser tab: the interface is HTML, but it is
-hosted in a native webview owned by this process, in a window with its own
-title bar and its own dock or taskbar entry. On a machine with no webview
-available -- usually a Linux box without WebKitGTK -- it falls back to a
-chromeless browser window with its own profile, which behaves the same way.
+From a clone, put `uv run` in front of any of them.
 
-**Everything that takes time has a bar on it, and every bar has an estimate.**
-That is a rule rather than a nicety, and `peerpixel/progress.py` is where it is
+**`peerpixel doctor` is the one to run when something looks wrong.** It prints
+what this machine is, what precision it is rendering in, and then renders a
+lighthouse and tells you where it put it. A lighthouse should look like a
+lighthouse.
+
+## Settings
+
+```bash
+peerpixel settings                  # list them, with what each one does
+peerpixel settings dtype            # explain one
+peerpixel settings free on          # change one
+```
+
+| | |
+| --- | --- |
+| `free` | also render for people with no pixels |
+| `dtype` | arithmetic precision: `auto`, `bfloat16`, `float16`, `float32` |
+| `keep-last` | write the last picture rendered to disk, so you can look at it |
+| `unload-after` | minutes idle before the model leaves memory; `0` never |
+| `colour` | colour and animation in this terminal |
+| `api` | which server to talk to |
+
+## Progress bars
+
+**Everything that takes time has a bar on it, and every bar says when it ends.**
+This is a rule rather than a nicety, and `peerpixel/progress.py` is where it is
 written down and tested. It rules out the two bars everybody has met: the one
 that sits at 0% for ten seconds because it only knows how to count bytes and no
 byte has arrived, and the one that reaches 99% and stops because the last piece
 of work was never in the plan.
 
-Three ideas do all of it. A task declares its phases up front, so the last
-percent is a phase like any other. Every phase carries an estimate learned from
-the last time this machine did it, and the clock keeps the bar moving at that
-speed whenever there is no measurement -- so a bar is never still. And past its
-estimate a phase slows down and approaches its own end without arriving; only
-the work actually finishing shows 100%.
+Three ideas do all of it.
 
-## Headless
+**Phases declared up front.** A task lists its phases before it starts, so the
+last percent is a phase like any other and finishing it is visible. Nothing may
+discover halfway through that there is more work.
 
-A box in a cupboard has no window and does not want one.
+**Time as a floor, never a ceiling.** Every phase carries an estimate of how
+long it takes, learned from the last time this machine did it. Measured
+progress -- bytes, steps, files -- always wins when there is any. When there is
+not, the clock keeps the bar moving at the speed the estimate implies. And the
+bar is painted by a ticker twenty times a second rather than by the work, so a
+ninety-second model load that cannot report anything at all still moves.
 
-```bash
-uv run peerpixel run          # renders until you stop it
-uv run peerpixel run --free   # the same, and take unpaid work too
-```
-
-`run` shows a live panel -- what is connected, what it is rendering, how far
-through, what you have earned this session. Piped to a file or a systemd
-journal it prints plain timestamped lines instead, because escape codes in a
-journal are noise nobody can read back.
-
-```bash
-uv run peerpixel pair ABC123    # get a code from peerpixel.cc
-uv run peerpixel download       # fetch the model ahead of time
-uv run peerpixel bench          # warm once, then measure 4 steady-state steps
-uv run peerpixel status         # the state of the pool and of this machine
-uv run peerpixel update         # fetch and install a newer worker
-uv run peerpixel app            # the window, if you want it after all
-```
-
-`bench` and `run` fetch the model themselves if it is not there yet, so
-`download` is only for getting it over with first.
+**Past the estimate, slow down; never stop and never lie.** An overrunning
+phase decelerates toward its own ceiling and never arrives. Only the work
+actually finishing shows 100%.
 
 ## Free work
 
@@ -100,17 +111,23 @@ candidate at a time, up to 12 a day. Those jobs pay nothing and always queue
 behind paid ones. A free master additionally needs the pool to have a machine
 left over afterwards, so unpaid work can never put a paying person in a queue.
 
-They only go to machines whose owner said yes -- the switch in the window, or:
+They only go to machines whose owner said yes. The switch belongs to your
+account rather than to this machine, so setting it needs you signed in: either
+use the Contribute page on the site, or export `PEERPIXEL_SESSION` with your
+`pp` cookie first. `peerpixel settings` says plainly when a switch only ever got
+as far as this machine.
 
-```bash
-uv run peerpixel free on
-uv run peerpixel free off       # the default
-```
+## When a render comes out wrong
 
-The switch belongs to your account rather than to the machine, so the worker
-needs you signed in to set it: either use the Contribute page on the site, or
-export `PEERPIXEL_SESSION` with your `pp` cookie first. The window tells you if
-a switch only ever got as far as this machine.
+A machine whose arithmetic this model does not get on with does not fail. It
+quietly fills the latents with NaN, and the decoder turns that into flat grey
+with a few black specks, which looks exactly like a broken model to anybody
+watching. That is nearly always precision rather than hardware.
+
+So the worker looks. Every render is checked before it is delivered, and one
+that came back as nonsense is never sent and never paid for: the worker drops
+to the next precision down, remembers, and renders it again. `peerpixel
+settings dtype` overrules that if you know better.
 
 ## Requirements
 
@@ -120,31 +137,26 @@ launcher installs a standalone one.
 
 ## The code
 
-Two halves. The app is standard library only and starts in a second on a
-machine where nothing is installed yet -- which is the whole reason the
-dependency install can have a progress bar, because the thing drawing it does
-not depend on what it is installing. Everything heavy runs in a child process
-and reports back over a pipe.
+Plain Python, standard library except where it renders. There is no window, no
+localhost server and no build step; the terminal is the whole interface.
 
 | | |
 | --- | --- |
 | `peerpixel/progress.py` | the rules every bar obeys -- pure, and tested |
-| `peerpixel/app.py` | the local server, the state, and what the buttons do |
-| `peerpixel/window.py` | getting a real window: webview, then app mode, then a tab |
-| `peerpixel/ui/` | the interface. Three files, no build step |
-| `peerpixel/tasks.py` | what the long jobs are, and the shape of each one's bar |
-| `peerpixel/events.py` | how a child process says what it is doing |
-| `peerpixel/runtime.py` | where this install keeps its Python |
-| `peerpixel/updater.py` | finding a newer PeerPixel, and becoming it |
+| `peerpixel/console.py` | drawing on a terminal, and degrading when there is none |
+| `peerpixel/cli.py` | the commands, and the guide somebody meets first |
+| `peerpixel/settings.py` | the knobs, declared once |
+| `peerpixel/plans.py` | what the long jobs are, and the shape of each one's bar |
 | `peerpixel/render.py` | runs the model - start here if an image looks wrong |
 | `peerpixel/worker.py` | holds the connection, takes jobs |
-| `peerpixel/relay.py` | the binary frame that carries draft and reference bytes |
-| `peerpixel/ui.py` | the terminal panel, for when there is no window |
+| `peerpixel/relay.py` | the binary frame that carries preview and reference bytes |
 | `peerpixel/api.py` | talks to peerpixel.cc |
 | `peerpixel/download.py` | fetches the weights and shows how far along it is |
 | `peerpixel/weights.py` | are they already here? asked without the Hub |
+| `peerpixel/updater.py` | finding a newer PeerPixel, and becoming it |
+| `peerpixel/runtime.py` | where this install keeps its Python |
 | `peerpixel/config.py` | the device token, in `~/.peerpixel` |
-| `launch/` | the two bootstrap scripts, and the only console you will see |
+| `launch/` | the two bootstrap scripts, and the only thing that runs before Python |
 
 Edit any of them and restart. There is nothing to rebuild.
 

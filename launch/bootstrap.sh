@@ -108,27 +108,13 @@ if ! "$UV" python find 3.12 >/dev/null 2>&1; then
     || give_up "Could not install Python 3.12."
 fi
 
-# pywebview is what makes this an application rather than a tab: it wraps the
-# interface in the operating system's own webview, in a window this process
-# owns. Small and quick, and uv caches it after the first run. Where it will
-# not install -- a Linux box with no WebKitGTK, most often -- the app falls
-# back to a chromeless browser window, so failing here costs a nicer window
-# rather than PeerPixel itself.
-WITH=""
-if step "Preparing the window" 12 -- \
-     "$UV" run --no-project --python 3.12 --with pywebview python -c "import webview"; then
-  WITH="--with pywebview"
+if [ "${PEERPIXEL_COMMAND:-}" = "" ]; then
+  printf '\n'
 fi
 
-if [ "${PEERPIXEL_COMMAND:-app}" = "app" ]; then
-  printf '\n  %sOpening PeerPixel.%s\n' "$AMBER" "$OFF"
-  printf '  %sLeave this window alone; closing it closes PeerPixel.%s\n\n' "$DIM" "$OFF"
-fi
-
-# --no-project on purpose: this interpreter runs the app, which is standard
-# library only. The rendering libraries are installed by the app itself, into
-# .venv, with a bar on it -- which is only possible because starting up did not
-# need them.
+# --no-project on purpose. This interpreter only has to be able to *start*
+# PeerPixel; the rendering libraries go into .venv, installed by PeerPixel
+# itself with a progress bar on it, and it moves onto that interpreter the
+# moment they are there. See runtime.use_venv.
 export PEERPIXEL_UV="$UV"
-# shellcheck disable=SC2086 - $WITH is either empty or two words, deliberately.
-exec "$UV" run --no-project --python 3.12 $WITH python -m peerpixel "${PEERPIXEL_COMMAND:-app}" "$@"
+exec "$UV" run --no-project --python 3.12 python -m peerpixel ${PEERPIXEL_COMMAND:+"$PEERPIXEL_COMMAND"} "$@"

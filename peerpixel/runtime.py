@@ -1,13 +1,9 @@
-"""Where this install keeps its Python, and how it starts a working child.
+"""Where this install keeps its Python and its libraries.
 
-The app is deliberately split in two. The part serving the window is standard
-library only and runs on a bare interpreter, so it comes up in a second and
-stays answering while a card is pinned. Everything heavy -- torch, diffusers,
-the Hub -- runs in a child out of the project environment, which may not even
-exist yet the first time somebody opens the app.
-
-That split is what lets the dependency install have a progress bar. An app that
-needed torch in order to start could only ever install torch in silence.
+Two things live here. Finding uv, which is what installs everything and which
+is famously not on the PATH of the shell that needs it. And answering whether
+the rendering libraries are actually present, which is the first question the
+onboarding asks and the one thing it cannot work out from a config file.
 """
 from __future__ import annotations
 
@@ -76,36 +72,37 @@ def dependencies_ready() -> bool:
     return bool(site)
 
 
-def child(command: list[str], *, heavy: bool = True) -> list[str] | None:
-    """The argv that runs one of this package's commands in a subprocess.
+def python_version() -> str:
+    return ".".join(str(n) for n in sys.version_info[:3])
 
-    Heavy work goes through the project environment. Light work -- a pairing
-    call, a status check -- can run on whatever interpreter is already here,
-    which means the app can do those before anything is installed.
+
+def running_in_venv() -> bool:
+    try:
+        return Path(sys.executable).resolve() == venv_python().resolve()
+    except OSError:
+        return False
+
+
+def use_venv() -> None:
+    """Carry on inside the project environment, in place.
+
+    The launcher starts this program on a bare interpreter, because that is the
+    only interpreter that exists before anything is installed -- and being able
+    to start there is what lets the install have a progress bar rather than
+    being the silence before one. The moment the libraries are actually present
+    the same command is re-run on the interpreter that can see them, keeping
+    its arguments, its environment and its terminal.
+
+    Nothing happens if there is no environment yet, or if this is already it.
     """
-    if not heavy:
-        return [sys.executable, "-m", "peerpixel", *command]
     python = venv_python()
-    if python.exists():
-        return [str(python), "-m", "peerpixel", *command]
-    found = uv()
-    if not found:
-        return None
-    return [found, "run", "--project", str(ROOT), "--python", PYTHON,
-            "python", "-m", "peerpixel", *command]
+    if not python.exists() or not dependencies_ready() or running_in_venv():
+        return
+    argv = [str(python), "-m", "peerpixel", *sys.argv[1:]]
+    if os.name == "nt":
+        # execv on Windows detaches the console from the parent in ways that
+        # lose Ctrl-C, so wait for the child and inherit its answer instead.
+        import subprocess
 
-
-def environment() -> dict:
-    """What a child inherits. Unbuffered, so its progress arrives as it happens.
-
-    Without PYTHONUNBUFFERED a child's stdout is a 8 KB block buffer the moment
-    it is a pipe rather than a terminal, and every event this app draws would
-    arrive in one burst at the end. That is the silent-installer failure with
-    extra steps.
-    """
-    return {
-        **os.environ,
-        "PYTHONUNBUFFERED": "1",
-        "PYTHONIOENCODING": "utf-8",
-        "PEERPIXEL_EVENTS": "1",
-    }
+        raise SystemExit(subprocess.run(argv, cwd=str(ROOT)).returncode)
+    os.execv(str(python), argv)

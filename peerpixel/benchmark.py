@@ -11,13 +11,18 @@ from . import api
 # long to learn whether they are allowed to join -- then failing them against an
 # admission limit written when a render was four steps -- would turn working
 # hardware away for no reason.
-BENCH_STEPS = 4
+#: Kept for the tests and for anybody reading; the number that actually runs
+#: lives in `render.OPERATIONS["bench"]`, because step count is pinned by the
+#: operation and ignored from the payload. Writing it in both places is how it
+#: came to run fifty steps while claiming to run four.
+from .render import OPERATIONS
+
+BENCH_STEPS = OPERATIONS["bench"]["steps"]
 JOB = {
     "id": "bench",
     "prompt": "a lighthouse made of blown glass",
     "seed": 1,
-    "steps": BENCH_STEPS,
-    "operation": "master",
+    "operation": "bench",
 }
 
 
