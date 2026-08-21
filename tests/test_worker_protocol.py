@@ -46,8 +46,11 @@ def ticking(values):
 
 
 class ProtocolVersionTests(unittest.TestCase):
-    def test_this_install_advertises_version_two(self):
-        self.assertEqual(worker.PROTOCOL_VERSION, 2)
+    def test_this_install_advertises_version_three(self):
+        # Bumped whenever what a job means changes. Version 2 rendered four
+        # distilled steps at 1024; handed a job priced for this version it would
+        # return a different picture at a different size.
+        self.assertEqual(worker.PROTOCOL_VERSION, 3)
 
     def test_the_model_is_kept_loaded_for_two_idle_hours(self):
         self.assertFalse(worker.should_unload_model(100, 100 + 7199, loaded=True))

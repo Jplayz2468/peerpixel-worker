@@ -5,17 +5,19 @@ import time
 
 from . import api
 
-# Benchmarked at master size on purpose. A 128px draft would time in
-# milliseconds on anything and would not notice a card that cannot hold a
-# 1024px render at all, which is the failure that costs somebody a paid job.
+# Master resolution, but nowhere near the master step count. The size is what
+# catches a card that cannot hold a real render; the steps are only there to be
+# timed. A full fifty-step master takes minutes, and making somebody wait that
+# long to learn whether they are allowed to join -- then failing them against an
+# admission limit written when a render was four steps -- would turn working
+# hardware away for no reason.
+BENCH_STEPS = 4
 JOB = {
     "id": "bench",
     "prompt": "a lighthouse made of blown glass",
     "seed": 1,
-    "steps": 4,
+    "steps": BENCH_STEPS,
     "operation": "master",
-    "width": 1024,
-    "height": 1024,
 }
 
 

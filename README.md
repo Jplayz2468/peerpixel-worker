@@ -3,12 +3,15 @@
 Renders images for people whose computers cannot. The pixels you earn show up
 on your dashboard at [peerpixel.cc](https://peerpixel.cc).
 
-There are two kinds of job. A **draft** is 128x128 at four steps: somebody is
-working out whether a composition is the one they wanted, and they are asking
-four times. It pays 0.1 pixel, all of it, and it never becomes a file: the JPEG
-goes back down this socket and is relayed straight to their browser. A
-**master** is 1024x1024 at four steps, conditioned on the draft they chose,
-which arrives over the same socket. It costs them 2 pixels and pays you 1.8.
+There are two kinds of job. A **draft** is small and quick: somebody is working
+out whether a composition is the one they wanted, and they are asking several
+times. It never becomes a file -- the JPEG goes back down this socket and is
+relayed straight to their browser. A **master** is the full picture, conditioned
+on the draft they chose, which arrives over the same socket.
+
+Whatever a job costs the person who asked for it is what you are paid for
+rendering it. The current prices and sizes live on the site rather than here, so
+this page cannot go stale on you.
 
 Runs on Windows, macOS and Linux. Setup opens a small dashboard in your browser,
 served only from this machine. After that it can run headless with no window.

@@ -4,19 +4,30 @@ FLUX.2 Klein run the way it was meant to run: diffusers on PyTorch, using
 whatever accelerator this machine has. CUDA on most Windows and Linux boxes,
 MPS on Apple silicon, CPU as a last resort.
 
-Two operations, and they are the same four steps at two sizes.
+This is the **base** checkpoint, not the step-distilled one, and that choice is
+the reason everything here is slower than it used to be. Distilled Klein
+renders in four steps and is several times faster, but it ignores guidance
+completely -- the pipeline disables classifier-free guidance outright when the
+checkpoint reports `is_distilled` -- and compared side by side on the same
+prompts it drifted on spatial instructions and on negative ones, and turned
+backgrounds into featureless blur. Fifty guided steps is worth the wait.
+
+Guidance costs double on top of the step count: a guided step runs the
+transformer twice, once for the prompt and once for an empty one, and mixes
+them. Fifty steps is a hundred forward passes.
 
 A **draft** is 128x128 from the prompt alone. It exists to answer whether the
-composition is the one somebody wanted, and it goes straight back down the
-socket rather than being uploaded anywhere.
+composition is the one somebody wanted. Sixteen steps rather than four, because
+a draft that is not a fair preview of the master is worse than no draft at all.
+It goes straight back down the socket rather than being uploaded anywhere.
 
-A **master** is 1024x1024 conditioned on the draft that was chosen. The draft
+A **master** is 512x512 conditioned on the draft that was chosen. The draft
 arrives over the socket, is upscaled to the output size with Lanczos, and is
 handed to Klein as a reference image. It is deliberately not img2img: an
-img2img `strength` throws away the first part of the schedule, so a four-step
-render conditioned that way would really run one or two steps. Reference-image
-conditioning keeps the whole four-step schedule and still keeps the framing,
-palette and pose of the draft.
+img2img `strength` throws away the first part of the schedule, so a conditioned
+render would silently run fewer steps than it was paid for. Reference-image
+conditioning keeps the whole schedule and still keeps the framing, palette and
+pose of the draft.
 
 This file is deliberately plain and short. If a render goes wrong, this is where
 to look, and you can edit it and restart the worker without rebuilding anything.
@@ -28,17 +39,29 @@ import os
 import subprocess
 import time
 
-MODEL = os.environ.get("PEERPIXEL_MODEL", "black-forest-labs/FLUX.2-klein-4B")
+MODEL = os.environ.get("PEERPIXEL_MODEL", "black-forest-labs/FLUX.2-klein-base-4B")
+
+#: Pinned, because an unpinned repo means two machines that downloaded on
+#: different days are running different weights. That is invisible until it is
+#: not: the network re-renders a fraction of jobs on a machine the operator owns
+#: and compares them, and honest machines disagreeing about weights looks
+#: exactly like fraud. Override only if you know why you are doing it.
+REVISION = os.environ.get("PEERPIXEL_MODEL_REVISION", "a3b4f4849157f664bdbc776fd7453c2783562f4d")
+if os.environ.get("PEERPIXEL_MODEL") and not os.environ.get("PEERPIXEL_MODEL_REVISION"):
+    # A custom model with the stock revision pin would fail to resolve.
+    REVISION = None
 
 #: Everything the network sends. The worker refuses anything else rather than
-#: guessing a size, because guessing wrong means charging for the wrong picture.
+#: guessing, because guessing wrong means charging for the wrong picture. These
+#: numbers must match public/generation-policy.mjs on the server.
+GUIDANCE = 5.0
 OPERATIONS = {
-    "draft": {"width": 128, "height": 128, "steps": 4},
-    "master": {"width": 1024, "height": 1024, "steps": 4},
+    "draft": {"width": 128, "height": 128, "steps": 16, "guidance": GUIDANCE},
+    "master": {"width": 512, "height": 512, "steps": 50, "guidance": GUIDANCE},
     # A check is a master rendered a second time on a machine the operator
     # owns, so it is the same work with the same inputs. Only what happens to
     # the result differs: it is compared rather than delivered.
-    "verify": {"width": 1024, "height": 1024, "steps": 4},
+    "verify": {"width": 512, "height": 512, "steps": 50, "guidance": GUIDANCE},
 }
 
 
@@ -185,7 +208,7 @@ class Renderer:
         self.accelerator = label
         print(f"loading {MODEL} on {label}...", flush=True)
         started = time.time()
-        pipe = Flux2KleinPipeline.from_pretrained(MODEL, torch_dtype=dtype)
+        pipe = Flux2KleinPipeline.from_pretrained(MODEL, revision=REVISION, torch_dtype=dtype)
 
         # Under roughly 24 GB the transformer and the text encoder cannot both
         # sit on the accelerator. Handing them over a layer at a time is slower
@@ -232,8 +255,6 @@ class Renderer:
             source = Image.open(io.BytesIO(reference))
             conditioning["image"] = [upscale_reference(source, (width, height))]
 
-        # Klein is step-distilled, so guidance_scale is ignored. Not passing it
-        # keeps the logs honest.
         watch = {}
         if on_step is not None:
             watch["callback_on_step_end"] = _reporter(on_step, steps)
@@ -241,6 +262,10 @@ class Renderer:
         image = self.pipe(
             prompt=job["prompt"],
             num_inference_steps=steps,
+            # Real classifier-free guidance, which the pipeline enables only
+            # because this checkpoint is not distilled. The negative side is an
+            # empty prompt, which is what it is compared against.
+            guidance_scale=spec["guidance"],
             height=height,
             width=width,
             generator=self.seed_generator(job.get("seed", 0)),

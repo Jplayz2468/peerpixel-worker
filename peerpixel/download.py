@@ -18,7 +18,7 @@ import os
 import threading
 from pathlib import Path
 
-from .render import MODEL
+from .render import MODEL, REVISION
 from .ui import Progress, human
 
 POLL = 0.5  # seconds between disk measurements
@@ -41,9 +41,9 @@ def _plan() -> tuple[list[str], int, str]:
     """
     from huggingface_hub import HfApi, hf_hub_download
 
-    index = json.loads(Path(hf_hub_download(MODEL, "model_index.json")).read_text())
+    index = json.loads(Path(hf_hub_download(MODEL, "model_index.json", revision=REVISION)).read_text())
     wanted = ["model_index.json"] + [f"{name}/*" for name in index if not name.startswith("_")]
-    info = HfApi().repo_info(MODEL, files_metadata=True)
+    info = HfApi().repo_info(MODEL, revision=REVISION, files_metadata=True)
     chosen = [
         f for f in info.siblings
         if any(fnmatch.fnmatch(f.rfilename, pattern) for pattern in wanted)
@@ -84,7 +84,7 @@ def ensure() -> str:
         files, total, sha = _plan()
     except Exception as error:  # noqa: BLE001
         try:
-            return snapshot_download(MODEL, local_files_only=True)  # cached, merely offline
+            return snapshot_download(MODEL, revision=REVISION, local_files_only=True)  # cached, merely offline
         except Exception:  # noqa: BLE001
             raise SystemExit(
                 f"cannot fetch {MODEL} from huggingface.co: {error}\n"
@@ -105,7 +105,7 @@ def ensure() -> str:
 
     def fetch():
         try:
-            outcome["path"] = snapshot_download(MODEL, allow_patterns=files, max_workers=4)
+            outcome["path"] = snapshot_download(MODEL, revision=REVISION, allow_patterns=files, max_workers=4)
         except BaseException as error:  # noqa: BLE001 - re-raised on the main thread
             outcome["error"] = error
 

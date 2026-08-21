@@ -17,9 +17,11 @@ from . import api, compare, config, dashboard_state, relay, ui
 
 #: What this install speaks. Version 1 rendered 512px and posted results over
 #: HTTP; it knew nothing of operations, transient drafts or reference images.
-#: The server hands drafts and masters only to version 2 and above, so an old
-#: install sits connected and idle until it is updated.
-PROTOCOL_VERSION = 2
+#: Version 2 rendered the step-distilled checkpoint: four steps, no guidance,
+#: 1024px masters. Either would take a job priced for this version and hand
+#: back a different picture at a different size, so the server gives work only
+#: to the current version and an old install sits idle until it is updated.
+PROTOCOL_VERSION = 3
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2

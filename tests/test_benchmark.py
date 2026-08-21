@@ -34,6 +34,12 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(len(renderer.jobs), 2)
         self.assertEqual(renderer.jobs[0]["steps"], 4)
         self.assertEqual(renderer.jobs[1]["steps"], 4)
+        # Master resolution so a card that cannot hold a real render fails here
+        # rather than on somebody's paid job, but nowhere near the master step
+        # count: a fifty-step admission test would take minutes and be judged
+        # against a limit written for a four-step one.
+        self.assertEqual(renderer.jobs[1]["operation"], "master")
+        self.assertNotIn("width", renderer.jobs[1])
         self.assertEqual(submitted, [(12345, "test gpu")])
         self.assertEqual(result[0], 12345)
 
