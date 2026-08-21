@@ -54,10 +54,13 @@ PLANS: dict[str, Plan] = {
     "start": plan("start", "Starting up",
                   Phase("load", "Loading the model", 8, 90),
                   Phase("connect", "Connecting to peerpixel.cc", 1, 8)),
+    # Decoding is a phase because it is minutes at 1024px on a modest machine,
+    # and a phase is the only place work is allowed to live: anything happening
+    # outside the plan has no room on the bar but the last percent.
     "job": plan("job", "Rendering",
                 Phase("load", "Loading the model", 3, 60),
-                Phase("wait", "Waiting for the chosen preview", 1, 4),
                 Phase("render", "Rendering", 20, 90),
+                Phase("decode", "Turning it into a picture", 4, 25),
                 Phase("deliver", "Delivering", 1, 6)),
     "update": plan("update", "Updating PeerPixel",
                    Phase("look", "Looking for a newer version", 1, 5),

@@ -6,8 +6,16 @@ on your dashboard at [peerpixel.cc](https://peerpixel.cc).
 There are two kinds of job. A **preview** is small and quick: somebody is
 working out whether a composition is the one they wanted, and they are asking
 several times. It never becomes a file -- the JPEG goes back down this socket
-and is relayed straight to their browser. A **master** is the full picture,
-the one they picked, rendered properly.
+and is relayed straight to their browser. A **master** is the full picture at
+1024x1024, rendered from nothing but a prompt and a seed.
+
+The two are the same picture because they start from the same noise. A seed
+names one 1024px noise tensor, and a preview renders that tensor averaged down
+to its own smaller shape -- which is still an exact sample of the distribution
+the model expects, unlike anything you get by scaling noise the other way. So a
+final needs nothing from the browser that asked for it, and closing a tab can
+no longer destroy a render somebody paid for. `seeded_latents` in
+`peerpixel/render.py` has the numbers.
 
 Whatever a job costs the person who asked for it is what you are paid for
 rendering it. The current prices and sizes live on the site rather than here, so

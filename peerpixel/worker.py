@@ -24,13 +24,13 @@ from .console import DIM, OFF, clock, say, step_line
 #: Version 1 rendered 512px and posted results over HTTP; it knew nothing of
 #: operations, transient previews or reference images. Version 2 rendered the
 #: step-distilled checkpoint: four steps, no guidance. Version 3 was a 128px
-#: preview and a 512px final. Any of them would take a job priced for this
-#: version and hand back a different picture at a different size -- and this
-#: worker pins sizes itself and refuses a payload that disagrees, so an old
-#: install handed a new job fails every one of them. The server therefore gives
-#: work only to the current version, and an old install sits connected, idle
-#: and unpaid until it is updated.
-PROTOCOL_VERSION = 4
+#: preview and a 512px final, conditioned on the preview handed back over the
+#: socket. Version 5 renders a final from its seed alone: nothing is sent back,
+#: and a version-4 worker would sit waiting forty-five seconds for conditioning
+#: bytes that are never coming and then fail the job. The server therefore
+#: gives work only to the current version, and an old install sits connected,
+#: idle and unpaid until it is updated.
+PROTOCOL_VERSION = 5
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2
@@ -59,29 +59,6 @@ def asked_to_stop() -> bool:
     the flag is only ever read between jobs.
     """
     return bool(config.read().get("stopAfterJob"))
-
-
-def await_reference(link, job_id: str, *, timeout: float, clock=time.monotonic):
-    """Block until the chosen preview arrives for this master, or give up.
-
-    The dispatcher asks the browser for it the moment this job is claimed, so
-    the usual wait is one round trip. A browser that has closed means there is
-    no picture to render from, and the job fails and refunds rather than
-    quietly producing a different image from the same words.
-    """
-    deadline = clock() + timeout
-    while clock() < deadline:
-        try:
-            raw = link.recv(timeout=min(TICK, max(0.0, deadline - clock())))
-        except TimeoutError:
-            continue
-        frame = relay.decode(raw) if not isinstance(raw, str) else None
-        if not frame:
-            continue
-        header, payload = frame
-        if header.get("type") == "conditioning" and header.get("jobId") == job_id:
-            return payload
-    return None
 
 
 def await_settlement(link, job_id: str, *, timeout: float = 30.0, clock=time.monotonic):
@@ -331,29 +308,13 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 bar.begin("load")
                 renderer.warm()
 
-            reference = None
-            if job.get("reference"):
-                bar.begin("wait")
-                if operation == "verify":
-                    # This machine belongs to the operator and is re-rendering
-                    # somebody else's finished job to check it. Both pictures
-                    # are fetched rather than pushed: nobody is waiting on this
-                    # and the bytes are already in storage.
-                    reference = api.verify_asset(job["id"], "reference")
-                else:
-                    reference = await_reference(
-                        link, job["id"],
-                        timeout=(job.get("referenceWaitMs") or 45000) / 1000)
-                    if reference is None:
-                        raise RuntimeError(
-                            "the browser never sent the preview to render from")
-
+            # Nothing to wait for. A final is its prompt and its seed, so it
+            # starts the moment it is claimed -- and a browser that closed its
+            # tab no longer costs somebody the render they paid for.
             bar.begin("render", detail=job["prompt"][:80])
-            # Timed from here rather than from the top of the job: waiting for
-            # somebody's browser to send a preview back is not this machine
-            # rendering, and folding it in would make every later bar too slow.
             render_started = time.monotonic()
-            jpeg = renderer.render(job, on_step=stepped, reference=reference,
+            jpeg = renderer.render(job, on_step=stepped,
+                                   on_decode=lambda: bar.begin("decode"),
                                    on_demote=lambda name: bar.note(f"retrying in {name}"))
             session.learn(operation, time.monotonic() - render_started, steps)
             bar.begin("deliver")

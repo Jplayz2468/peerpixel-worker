@@ -56,3 +56,23 @@ class StepTimingTests(unittest.TestCase):
         worker.remember_step("master", 0, 50)
         worker.remember_step("master", 10, 0)
         self.assertEqual(config.read().get("secondsPerStep"), {})
+
+
+class JobPlanTests(unittest.TestCase):
+    """Nothing a job does may happen outside a phase of its plan."""
+
+    def test_decoding_has_a_phase_of_its_own(self):
+        from peerpixel.plans import PLANS
+
+        names = [phase.name for phase in PLANS["job"].phases]
+        self.assertIn("decode", names)
+        self.assertLess(names.index("render"), names.index("decode"))
+
+    def test_nothing_waits_for_a_reference_any_more(self):
+        from peerpixel.plans import PLANS
+
+        self.assertNotIn("wait", [phase.name for phase in PLANS["job"].phases])
+
+
+if __name__ == "__main__":
+    unittest.main()

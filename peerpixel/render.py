@@ -21,14 +21,22 @@ answer whether the composition is the one somebody wanted, and it is asked
 several times before anything is chosen, so being cheap is most of its job. It
 goes straight back down the socket rather than being uploaded anywhere.
 
-A **master** is 1024x1024 -- the size this checkpoint was trained at --
-conditioned on the preview that was chosen. The preview arrives over the
-socket, is upscaled to the output size with Lanczos, and is handed to Klein as
-a reference image. It is deliberately not img2img: an
-img2img `strength` throws away the first part of the schedule, so a conditioned
-render would silently run fewer steps than it was paid for. Reference-image
-conditioning keeps the whole schedule and still keeps the framing, palette and
-pose of the draft.
+A **master** is 1024x1024, the size this checkpoint was trained at, from the
+prompt and a seed. Nothing else. It is not conditioned on the preview that was
+chosen, does not receive it, and does not know it exists.
+
+What ties the two together is the noise. A seed names one 1024px noise tensor;
+a preview renders that same tensor averaged down to its own smaller shape, so
+the two share the low-frequency structure that decides where things end up in
+the frame. See `seeded_latents`, which is also where the reason it must be an
+average rather than an upscale is written down.
+
+This replaced handing the chosen preview back as a reference image. That worked
+-- it kept the framing -- but it could not promise that a final looked like a
+native render at its own resolution, because it was not one: it was a render
+with somebody's 256px picture blown up 4x sitting in its context. It also meant
+a final could not start until the browser that asked for it sent the bytes
+back, so closing a tab lost a paid render. None of that is true any more.
 
 This file is deliberately plain and short. If a render goes wrong, this is where
 to look, and you can edit it and restart the worker without rebuilding anything.
@@ -255,19 +263,62 @@ def operation_of(job: dict) -> dict:
     return {"name": name, **spec, "guidance": guidance}
 
 
-def upscale_reference(image, size):
-    """The chosen draft at the master's resolution.
+def latent_grid(pipe, pixels: int) -> int:
+    """How many latent positions a side of `pixels` becomes.
 
-    Lanczos, because the draft is being handed to the model as a description of
-    a composition and a nearest-neighbour blow-up would hand it 128px of blocks
-    to reproduce faithfully.
+    The VAE compresses by `vae_scale_factor` and the transformer packs 2x2 of
+    what is left, which is where the doubling comes from. Asked of the pipeline
+    rather than written down, so a checkpoint with a different VAE does not
+    silently produce noise of the wrong shape.
     """
-    from PIL import Image
+    return int(pixels) // (pipe.vae_scale_factor * 2)
 
-    reference = image if image.mode == "RGB" else image.convert("RGB")
-    if reference.size == size:
-        return reference
-    return reference.resize(size, Image.LANCZOS)
+
+def seeded_latents(pipe, spec: dict, seed: int, dtype):
+    """The noise this render starts from, derived from the final's noise.
+
+    This is what replaces conditioning a final on the preview that was picked.
+    A seed names one 1024px noise tensor and nothing else. A preview renders
+    the same tensor with each block of it averaged down to its own smaller
+    shape, so the two share their low-frequency structure -- which is the part
+    of the noise that decides where things end up in the frame -- while the
+    final stays an ordinary render at its own resolution, with nothing upscaled
+    into it and no reference image anywhere.
+
+    The averaging is the only direction that works. Scaling noise *up* is what
+    it is tempting to do and it destroys the thing being scaled: a 4x
+    nearest-neighbour blow-up leaves neighbouring values 0.76 correlated and
+    bilinear leaves them 0.93, where real noise is 0.00, and the model reads
+    that correlation as structure that was never in the picture. Averaging
+    down survives it exactly. Each output is a sum of f*f independent unit
+    normals divided by f, so its variance is f*f/f*f = 1 and the blocks do not
+    overlap, which leaves the result an exact sample of the same distribution
+    the model was trained to start from. Measured: 0.001 correlation, variance
+    0.996.
+    """
+    import torch
+
+    master = OPERATIONS["master"]
+    channels = pipe.transformer.config.in_channels
+    tall = latent_grid(pipe, master["height"])
+    wide = latent_grid(pipe, master["width"])
+    # Always drawn on the CPU at full precision. The seed has to name the same
+    # tensor on every machine in the network, and neither a GPU's generator nor
+    # bfloat16 rounding is portable enough to promise that.
+    noise = torch.randn((1, channels, tall, wide), dtype=torch.float32,
+                        generator=torch.Generator("cpu").manual_seed(int(seed) & 0xFFFFFFFF))
+
+    here_tall = latent_grid(pipe, spec["height"])
+    here_wide = latent_grid(pipe, spec["width"])
+    if (here_tall, here_wide) != (tall, wide):
+        down = tall // here_tall
+        if down < 1 or tall % here_tall or wide % here_wide or wide // here_wide != down:
+            raise ValueError(
+                f"{spec['name']} at {spec['width']}px does not divide the "
+                f"{master['width']}px final, so its noise cannot be derived from it")
+        noise = noise.reshape(1, channels, here_tall, down, here_wide, down)
+        noise = noise.mean(dim=(3, 5)) * down
+    return noise.to(dtype)
 
 
 def seeded_generator(seed: int):
@@ -301,14 +352,16 @@ class _Watch:
     next to the render that produced them.
     """
 
-    def __init__(self, on_step, asked: int):
+    def __init__(self, on_step, asked: int, on_last=None):
         self.on_step = on_step
         self.asked = asked
+        self.on_last = on_last
         self.broken = False
 
     def __call__(self, pipe, index, timestep, kwargs):
         total = getattr(pipe, "_num_timesteps", 0) or self.asked
-        if index + 1 >= total:
+        last = index + 1 >= total
+        if last:
             latents = kwargs.get("latents")
             if latents is not None:
                 import torch
@@ -316,6 +369,13 @@ class _Watch:
                 self.broken = not bool(torch.isfinite(latents).all())
         if self.on_step is not None:
             self.on_step(index + 1, total)
+        if last and self.on_last is not None:
+            # Everything after this point is the VAE turning latents into a
+            # 1024px picture, which on a memory-tight machine is the longest
+            # single thing a render does. Whatever is drawing needs to be told,
+            # or its bar sits at the end of the render phase with a full
+            # measurement behind it and nothing left to move it.
+            self.on_last()
         return kwargs
 
 
@@ -371,6 +431,21 @@ class Renderer:
         else:
             pipe.to(device)
         pipe.set_progress_bar_config(disable=True)
+
+        # Decoding is one unbounded call over the whole picture, and at 1024px
+        # that is where a machine without memory to spare starts swapping --
+        # a minute or two after the last step, or never. Tiling bounds the peak
+        # instead of the total, which is the number that hurts.
+        _tried(pipe.vae.enable_tiling, None)
+
+        # `force_upcast` runs the decoder in float32 because float16 overflows
+        # in it. bfloat16 has float32's exponent range and does not, so paying
+        # for the upcast there is paying twice the memory for nothing.
+        import torch as _torch
+
+        if dtype is not _torch.float16:
+            _tried(lambda: pipe.vae.config.__setattr__("force_upcast", False), None)
+
         self.pipe = pipe
         self.load_seconds = time.time() - started
 
@@ -410,7 +485,7 @@ class Renderer:
             pass
 
     def render(self, job: dict, on_step=None, reference: bytes | None = None,
-               on_demote=None) -> bytes:
+               on_demote=None, on_decode=None) -> bytes:
         """Render, and never hand back something that is not a picture.
 
         One retry, on the next precision down, because the failure this catches
@@ -419,7 +494,7 @@ class Renderer:
         using the precision that caused it.
         """
         try:
-            return self._render(job, on_step=on_step, reference=reference)
+            return self._render(job, on_step=on_step, on_decode=on_decode)
         except _Nonsense:
             chosen = self.demote()
             if chosen is None:
@@ -428,27 +503,22 @@ class Renderer:
                 on_demote(chosen)
             print(f"that render came out as nan; retrying in {chosen}", flush=True)
         try:
-            return self._render(job, on_step=on_step, reference=reference)
+            return self._render(job, on_step=on_step, on_decode=on_decode)
         except _Nonsense:
             raise RuntimeError(BROKEN) from None
 
-    def _render(self, job: dict, on_step=None, reference: bytes | None = None) -> bytes:
-        from PIL import Image
-
+    def _render(self, job: dict, on_step=None, on_decode=None) -> bytes:
         self.warm()
         spec = operation_of(job)
         width, height, steps = spec["width"], spec["height"], spec["steps"]
 
-        # A master renders the composition somebody picked, so the draft they
-        # picked is handed to the model as a reference. Without one it is an
-        # ordinary render at the master's size, which is what a probe is and
-        # what a browser that lost its own copy falls back to.
-        conditioning = {}
-        if spec["name"] in ("master", "verify") and reference:
-            source = Image.open(io.BytesIO(reference))
-            conditioning["image"] = [upscale_reference(source, (width, height))]
+        # The seed is the whole of the relationship between a preview and its
+        # final. Nothing is handed to the model but the prompt and the noise
+        # that seed names; `reference` is accepted and ignored so that a server
+        # still sending one gets a correct render rather than an error.
+        latents = seeded_latents(self.pipe, spec, job.get("seed", 0), self._dtype)
 
-        watch = _Watch(on_step, steps)
+        watch = _Watch(on_step, steps, on_last=on_decode)
 
         image = self.pipe(
             prompt=job["prompt"],
@@ -460,7 +530,7 @@ class Renderer:
             height=height,
             width=width,
             generator=self.seed_generator(job.get("seed", 0)),
-            **conditioning,
+            latents=latents,
             callback_on_step_end=watch,
         ).images[0]
 

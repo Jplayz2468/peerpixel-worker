@@ -413,6 +413,7 @@ def cmd_doctor(_argv: list[str]) -> None:
             job,
             on_step=lambda done, total: made.report(done, total,
                                                     detail=f"step {done} of {total}"),
+            on_decode=lambda: made.begin("decode"),
             on_demote=lambda name: made.note(f"retrying in {name}"))
 
     started = time.monotonic()

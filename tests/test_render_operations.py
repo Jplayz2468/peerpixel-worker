@@ -2,8 +2,8 @@
 
 A fake pipeline stands in for Klein, so these run on a laptop with no GPU and
 no model download. What is being checked is the contract the network depends
-on: sizes, step counts, the seed, and that a master is conditioned on the draft
-somebody chose rather than started over from it.
+on: sizes, step counts, and that a final is handed nothing but its prompt and
+the noise its seed names.
 """
 import io
 import unittest
@@ -12,6 +12,14 @@ from peerpixel import render
 
 
 class FakePipeline:
+    """Enough of Klein to record what it was asked for."""
+
+    vae_scale_factor = 8
+
+    class transformer:  # noqa: N801 - mirrors the attribute it stands in for
+        class config:
+            in_channels = 128
+
     def __init__(self):
         self.calls = []
 
@@ -50,6 +58,9 @@ def renderer_with(pipe):
     renderer.accelerator = "test"
     renderer.warm = lambda: None
     renderer.seed_generator = lambda seed: FakeGenerator(int(seed))
+    import torch
+
+    renderer._dtype = torch.float32
     return renderer
 
 
@@ -119,53 +130,67 @@ class DraftTests(unittest.TestCase):
 
 
 class MasterTests(unittest.TestCase):
-    def test_a_master_is_1024px_at_fifty_guided_steps_conditioned_on_the_preview(self):
+    def test_a_final_is_1024px_at_fifty_guided_steps_from_prompt_and_seed(self):
         pipe = FakePipeline()
         renderer_with(pipe).render(
-            {"prompt": "a quiet harbour", "seed": 7, "operation": "master"},
-            reference=a_jpeg((256, 256)))
+            {"prompt": "a quiet harbour", "seed": 7, "operation": "master"})
 
         (call,) = pipe.calls
         self.assertEqual(call["width"], 1024)
         self.assertEqual(call["height"], 1024)
         self.assertEqual(call["num_inference_steps"], 50)
         self.assertEqual(call["generator"].initial_seed(), 7,
-                         "the master keeps the preview's seed")
-        # Reference conditioning, not img2img: strength would throw away the
-        # first part of a four-step schedule and leave one or two real steps.
-        self.assertNotIn("strength", call)
-        self.assertNotIn("mask_image", call)
+                         "the final keeps the preview's seed")
+        # Not img2img and not reference conditioning. A final is a native
+        # render at its own resolution with nothing else in its context, which
+        # is the only way it can be as good as one.
+        for absent in ("image", "strength", "mask_image"):
+            self.assertNotIn(absent, call)
 
-    def test_the_chosen_preview_is_upscaled_to_the_output_size_before_conditioning(self):
+    def test_a_final_starts_from_the_noise_its_seed_names(self):
         pipe = FakePipeline()
+        renderer_with(pipe).render({"prompt": "x", "seed": 7, "operation": "master"})
+        latents = pipe.calls[0]["latents"]
+        self.assertEqual(tuple(latents.shape), (1, 128, 64, 64))
+
+    def test_a_preview_and_its_final_share_their_noise(self):
+        """The whole of the relationship between the two pictures."""
+        import torch
+
+        pipe = FakePipeline()
+        renderer = renderer_with(pipe)
+        renderer.render({"prompt": "x", "seed": 7, "operation": "draft"})
+        renderer.render({"prompt": "x", "seed": 7, "operation": "master"})
+        preview, final = (call["latents"] for call in pipe.calls)
+        self.assertTrue(torch.allclose(
+            preview, final.reshape(1, 128, 16, 4, 16, 4).mean(dim=(3, 5)) * 4, atol=1e-5))
+
+    def test_the_decode_is_announced_so_the_bar_does_not_sit_at_the_last_step(self):
+        """The freeze this exists to prevent, as a test.
+
+        Everything after the final step is the VAE building a 1024px picture,
+        and on a modest machine that is a minute or two. Inside the render
+        phase it has nowhere to go: the phase has already measured itself
+        complete, so the bar stops dead at step 50 of 50 and stays there.
+        """
+        pipe = FakePipeline()
+        order = []
         renderer_with(pipe).render(
             {"prompt": "x", "seed": 1, "operation": "master"},
-            reference=a_jpeg((256, 256)))
-        (reference,) = pipe.calls[0]["image"]
-        self.assertEqual(reference.size, (1024, 1024))
-        self.assertEqual(reference.mode, "RGB")
+            on_step=lambda done, total: order.append(("step", done)),
+            on_decode=lambda: order.append(("decode", None)))
 
-    def test_upscaling_uses_lanczos_and_leaves_a_matching_size_alone(self):
-        from PIL import Image
-        source = Image.new("RGB", (1024, 1024), (10, 20, 30))
-        self.assertIs(render.upscale_reference(source, (1024, 1024)), source)
+        self.assertEqual(order[-1], ("decode", None), "decoding is announced last")
+        self.assertEqual(order[-2], ("step", 50), "and only after the final step")
+        self.assertEqual(sum(1 for kind, _ in order if kind == "decode"), 1)
 
-        small = Image.new("RGB", (256, 256), (255, 0, 0))
-        grown = render.upscale_reference(small, (1024, 1024))
-        self.assertEqual(grown.size, (1024, 1024))
-        self.assertEqual(grown.getpixel((512, 512)), (255, 0, 0))
-
-    def test_a_master_with_no_reference_still_renders_at_master_size(self):
-        # A probe has no browser behind it, and a browser can lose its copy.
-        # Neither is a reason to hand back nothing.
+    def test_a_reference_that_still_arrives_is_ignored_rather_than_refused(self):
+        # A server one version behind may still send one. Rendering the right
+        # picture beats failing the job over a field nobody reads.
         pipe = FakePipeline()
-        renderer_with(pipe).render({"prompt": "x", "seed": 1, "operation": "master"})
-        self.assertEqual(pipe.calls[0]["width"], 1024)
+        renderer_with(pipe).render(
+            {"prompt": "x", "seed": 7, "operation": "master"}, reference=a_jpeg((256, 256)))
         self.assertNotIn("image", pipe.calls[0])
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class GuidanceTests(unittest.TestCase):

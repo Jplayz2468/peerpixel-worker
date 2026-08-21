@@ -52,6 +52,11 @@ def ticking(values):
 SIZES_BY_VERSION = {
     3: {"draft": (128, 16), "master": (512, 50)},
     4: {"draft": (256, 6), "master": (1024, 50)},
+    # Same sizes as 4; what changed is that a final is rendered from its seed
+    # alone. A version-4 worker would wait forty-five seconds for conditioning
+    # bytes that are never sent and then fail the job, so it still has to be
+    # kept away from today's work.
+    5: {"draft": (256, 6), "master": (1024, 50)},
 }
 
 
@@ -75,39 +80,12 @@ class ProtocolVersionTests(unittest.TestCase):
                              (size, size), f"{name} size")
             self.assertEqual(OPERATIONS[name]["steps"], steps, f"{name} steps")
 
-    def test_no_two_versions_describe_the_same_job(self):
-        # A bump that changed nothing would strand every older install for no
-        # reason at all.
-        shapes = [tuple(sorted(v.items())) for v in SIZES_BY_VERSION.values()]
-        self.assertEqual(len(shapes), len(set(shapes)))
+    def test_the_current_version_is_the_highest_one_described(self):
+        self.assertEqual(worker.PROTOCOL_VERSION, max(SIZES_BY_VERSION))
 
     def test_the_model_is_kept_loaded_for_two_idle_hours(self):
         self.assertFalse(worker.should_unload_model(100, 100 + 7199, loaded=True))
         self.assertTrue(worker.should_unload_model(100, 100 + 7200, loaded=True))
-
-
-class ConditioningTests(unittest.TestCase):
-    def test_a_master_waits_for_the_draft_that_was_chosen(self):
-        reference = bytes([0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9])
-        link = FakeLink([
-            None,                                                  # a quiet tick
-            json.dumps({"type": "ack"}),                            # unrelated chatter
-            relay.encode({"type": "conditioning", "jobId": "m1"}, reference),
-        ])
-        self.assertEqual(
-            worker.await_reference(link, "m1", timeout=5, clock=ticking(0.1)),
-            reference,
-        )
-
-    def test_conditioning_for_a_different_job_is_ignored(self):
-        link = FakeLink([
-            relay.encode({"type": "conditioning", "jobId": "somebody-else"}, b"\xff\xd8\xff\xd9"),
-        ])
-        self.assertIsNone(worker.await_reference(link, "m1", timeout=1, clock=ticking(0.3)))
-
-    def test_a_browser_that_never_answers_ends_the_wait(self):
-        link = FakeLink([None, None, None])
-        self.assertIsNone(worker.await_reference(link, "m1", timeout=1, clock=ticking(0.4)))
 
 
 class DraftSettlementTests(unittest.TestCase):
