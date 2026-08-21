@@ -14,6 +14,16 @@ Style Directives:
 - VECTOR: Direct flat 2D graphic vector art, clean geometric silhouettes, solid color planes, pure solid background, zero 3D gradients or depth."""
 
 
+def enhancement_messages(prompt: str, style: str, variation=None) -> list[dict[str, str]]:
+    variation_line = "" if variation is None else f"\nDraft variation seed: {variation}"
+    return [
+        {"role": "system", "content": SYSTEM_INSTRUCTION},
+        {"role": "user", "content": (
+            f"Chosen style: {style.upper()}{variation_line}\nUser prompt: {prompt.strip()}"
+        )},
+    ]
+
+
 class PromptEnhancer:
     def __init__(self, model_path=None):
         self.model_path = model_path
@@ -30,7 +40,7 @@ class PromptEnhancer:
         self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
         self.model = AutoModelForCausalLM.from_pretrained(path, local_files_only=True, device_map="auto")
 
-    def enhance(self, prompt: str, style: str, *, enabled=True, resolved=None) -> str:
+    def enhance(self, prompt: str, style: str, *, enabled=True, resolved=None, variation=None) -> str:
         if resolved:
             return str(resolved).strip()
         if not enabled:
@@ -38,10 +48,7 @@ class PromptEnhancer:
         if style not in ("photoreal", "anime", "vector"):
             raise ValueError(f"unknown_style:{style}")
         self.warm()
-        messages = [
-            {"role": "system", "content": SYSTEM_INSTRUCTION},
-            {"role": "user", "content": f"Chosen style: {style.upper()}\nUser prompt: {prompt.strip()}"},
-        ]
+        messages = enhancement_messages(prompt, style, variation)
         text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
         )

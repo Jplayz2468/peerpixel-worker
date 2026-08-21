@@ -3,11 +3,19 @@
 Renders images for people whose computers cannot. The pixels you earn show up
 on your dashboard at [peerpixel.cc](https://peerpixel.cc).
 
-There are two kinds of job. A **preview** is small and quick: somebody is
+There are three kinds of job. A **draft** is small and quick: somebody is
 working out whether a composition is the one they wanted, and they are asking
 several times. It never becomes a file -- the JPEG goes back down this socket
 and is relayed straight to their browser. A **master** is the full picture at
-1024x1024, rendered from nothing but a prompt and a seed.
+1024x1024, rendered from nothing but a prompt and a seed. An **upscale** runs
+AuraSR-v2 only after somebody chooses the paid 4x download; those bytes go
+straight to that browser and are never saved by the server.
+
+Each enhanced draft runs Qwen3-0.6B independently with its own variation seed.
+The selected draft's enhanced prompt is then reused verbatim for its master.
+Photoreal, anime, and vector jobs activate only their pinned LoRA recipe. Every
+render is classified locally before delivery, and prompt, moderation, render,
+and upscale operations all return evidence for random trusted-user rechecks.
 
 The two are the same picture because they start from the same noise. A seed
 names one 1024px noise tensor, and a preview renders that tensor averaged down
@@ -36,9 +44,10 @@ libraries, the model, a pairing code, and a speed check, in the only order they
 can happen in. Everything lands inside this folder or in the usual per-user
 caches. Nothing is installed system-wide and nothing needs administrator rights.
 
-The first run downloads about 18 GB. You can stop at any point with Ctrl-C and
-run it again; every download resumes from where it stopped and nothing starts
-over.
+The first run downloads the 4B base model from its pinned Hugging Face revision.
+Smaller models and LoRAs come from PeerPixel's private, signed Cloudflare R2
+registry only when first needed. Hashes and manifest signatures are checked
+before anything is loaded, and downloads resume after interruption.
 
 > On macOS, anything downloaded from the internet is quarantined until you have
 > opened it once deliberately: right-click `PeerPixel.command` and choose
@@ -137,11 +146,17 @@ that came back as nonsense is never sent and never paid for: the worker drops
 to the next precision down, remembers, and renders it again. `peerpixel
 settings dtype` overrules that if you know better.
 
-## Requirements
+## Requirements and platforms
 
 An NVIDIA card with 8 GB or more, or an Apple silicon Mac with 16 GB or more.
 CPU works but is far too slow to pass the benchmark. No Python needed: the
 launcher installs a standalone one.
+
+The worker uses platform-neutral cache paths and Python APIs. Windows uses
+`PeerPixel.cmd`; Linux uses `PeerPixel.sh` or the desktop launcher; macOS uses
+`PeerPixel.command`. CUDA is selected on Windows/Linux when available, MPS on
+Apple silicon, and CPU is the portable fallback. Model activation explicitly
+installs PEFT, and AuraSR selects CUDA, MPS, or CPU at runtime.
 
 ## The code
 
@@ -172,6 +187,9 @@ Edit any of them and restart. There is nothing to rebuild.
 python -m unittest discover -s tests -t .
 ```
 
-## Licence
+## Licence and model notices
 
-MIT
+The distribution includes the standard Apache 2.0 text in `APACHE-2.0.txt`.
+`THIRD_PARTY_NOTICES.txt` lists every bundled or on-demand model and travels in
+the built wheel alongside the licence; neither notices nor model identifiers
+are embedded into downloaded images.

@@ -504,6 +504,7 @@ class Renderer:
         effective = self._enhancer.enhance(
             job["prompt"], job.get("style", "photoreal"),
             enabled=job.get("enhance", True), resolved=job.get("enhancedPrompt"),
+            variation=job.get("seed") if job.get("operation") == "draft" else None,
         )
         resolved = {**job, "prompt": effective}
         jpeg = self.render(resolved, **render_options)
@@ -520,6 +521,7 @@ class Renderer:
                 {"operation": "prompt", "inputDigest": _digest({
                     "prompt": job["prompt"], "style": job.get("style", "photoreal"),
                     "enhance": job.get("enhance", True),
+                    "variation": job.get("seed") if job.get("operation") == "draft" else None,
                 }), "outputDigest": _digest(effective), "runtimeVersion": runtime},
                 {"operation": "render", "inputDigest": _digest({
                     "prompt": effective, "seed": job.get("seed", 0),

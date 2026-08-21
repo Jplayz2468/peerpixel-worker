@@ -1,12 +1,21 @@
+import inspect
 import unittest
 from unittest import mock
 
-from peerpixel.prompt_enhancer import PromptEnhancer, SYSTEM_INSTRUCTION
+from peerpixel.prompt_enhancer import PromptEnhancer, SYSTEM_INSTRUCTION, enhancement_messages
 from peerpixel.safety import THRESHOLD
 from peerpixel.render import Renderer
 
 
 class StyledPipelineTests(unittest.TestCase):
+    def test_prompt_enhancer_accepts_a_per_draft_variation(self):
+        parameters = inspect.signature(PromptEnhancer.enhance).parameters
+        self.assertIn("variation", parameters)
+        first = enhancement_messages("fox", "anime", variation=101)
+        second = enhancement_messages("fox", "anime", variation=202)
+        self.assertNotEqual(first[1]["content"], second[1]["content"])
+        self.assertIn("Draft variation seed: 101", first[1]["content"])
+
     def test_exact_prompt_instruction_and_bypass_paths(self):
         self.assertIn("Output ONLY the raw optimized descriptive prompt (1–2 sentences). No preamble, no quotes.", SYSTEM_INSTRUCTION)
         enhancer = PromptEnhancer()

@@ -8,11 +8,13 @@ dependencies = [
   "diffusers>=0.39",
   "transformers>=4.57",
   "accelerate>=1.0",
+  "peft>=0.17",
   "safetensors>=0.4",
   "pillow>=10",
   "huggingface-hub>=0.30",
   "websockets>=13",
   "zstandard>=0.23",
+  "aura-sr>=0.0.4",
 ]
 
 [project.scripts]
