@@ -228,6 +228,17 @@ def cuda_memory_mode(*, total: int, free: int) -> str:
     return "group"
 
 
+def cuda_group_options(*, total: int, free: int) -> dict:
+    """Transfers for the constrained-card path.
+
+    Stream prefetch deliberately stays off: it overlaps compute nicely, but
+    holds the current and next groups together and can OOM a 16GB card before
+    its first step. One synchronous block is still much faster than moving
+    every leaf for every call in sequential offload.
+    """
+    return {"non_blocking": False, "use_stream": False, "record_stream": False}
+
+
 def _cuda_oom(error: BaseException) -> bool:
     try:
         import torch
@@ -478,14 +489,13 @@ class Renderer:
                 # One block per group keeps even 12GB cards below their limit.
                 # A separate CUDA stream overlaps the next transfer with the
                 # current block's compute, avoiding sequential-offload speed.
+                group_options = cuda_group_options(total=total, free=free)
                 pipe.enable_group_offload(
                     onload_device=torch.device("cuda"),
                     offload_device=torch.device("cpu"),
                     offload_type="block_level",
                     num_blocks_per_group=1,
-                    non_blocking=True,
-                    use_stream=True,
-                    record_stream=False,
+                    **group_options,
                 )
             else:
                 pipe.to(device)
@@ -558,7 +568,7 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.7.2"
+        runtime = "peerpixel-worker/0.7.3"
         return jpeg, {
             "enhancedPrompt": effective,
             "moderation": moderation,
