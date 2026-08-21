@@ -8,6 +8,7 @@ pairing, benchmarking and the dashboard all have to survive being told so.
 import sys
 import types
 import unittest
+import subprocess
 from unittest.mock import patch
 
 from peerpixel import render
@@ -140,8 +141,43 @@ class OffloadPolicyTests(unittest.TestCase):
         self.assertEqual(cuda_memory_mode(total=48e9, free=40e9), "resident")
         self.assertEqual(cuda_group_options(total=16e9, free=14e9), {
             "non_blocking": False, "use_stream": False, "record_stream": False,
+            "exclude_modules": ["vae"],
         })
         self.assertEqual(cuda_group_options(total=48e9, free=19e9)["use_stream"], False)
+
+    def test_group_offload_keeps_the_decoder_on_cuda(self):
+        options = render.cuda_group_options(total=16e9, free=14e9)
+        self.assertIn("vae", options["exclude_modules"],
+                      "CPU VAE weights cannot decode CUDA latents")
+
+
+class VramDiagnosisTests(unittest.TestCase):
+    def test_low_vram_names_the_apps_to_close_with_pid_and_usage(self):
+        xml = """<nvidia_smi_log><gpu><processes>
+          <process_info><pid>5172</pid><type>G</type>
+            <process_name>/usr/lib/chromium/chromium</process_name>
+            <used_memory>15273 MiB</used_memory></process_info>
+          <process_info><pid>1172</pid><type>G</type>
+            <process_name>/usr/bin/kwin_wayland</process_name>
+            <used_memory>14 MiB</used_memory></process_info>
+        </processes></gpu></nvidia_smi_log>"""
+        answer = subprocess.CompletedProcess([], 0, xml, "")
+
+        with patch("peerpixel.render.subprocess.run", return_value=answer):
+            processes = render.nvidia_processes()
+        with self.assertRaises(RuntimeError) as caught:
+            render.require_cuda_headroom(194 * 1024 ** 2, 16303 * 1024 ** 2,
+                                         processes=processes)
+
+        message = str(caught.exception)
+        self.assertIn("chromium (PID 5172): 14.9 GB", message)
+        self.assertIn("kwin_wayland (PID 1172): 14 MB", message)
+        self.assertIn("Close or restart", message)
+        self.assertIn("run PeerPixel again", message)
+
+    def test_normal_free_vram_needs_no_process_scan_or_warning(self):
+        render.require_cuda_headroom(12 * 1024 ** 3, 16 * 1024 ** 3,
+                                     processes=[("anything", 1, 15 * 1024 ** 3)])
 
 
 if __name__ == "__main__":

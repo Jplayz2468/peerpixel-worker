@@ -49,6 +49,7 @@ import json
 import os
 import subprocess
 import time
+import xml.etree.ElementTree as ET
 
 from . import config
 
@@ -194,6 +195,57 @@ def nvidia_memory() -> tuple[int, int]:
         return 0, 0
 
 
+def nvidia_processes() -> list[tuple[str, int, int]]:
+    """GPU consumers as (app, pid, bytes), including graphics processes."""
+    try:
+        answer = subprocess.run(
+            ["nvidia-smi", "-q", "-x"], capture_output=True, text=True,
+            timeout=3, check=True,
+        )
+        root = ET.fromstring(answer.stdout)
+    except Exception:  # noqa: BLE001 - diagnostics are allowed to be partial
+        return []
+
+    found = []
+    for process in root.findall(".//process_info"):
+        try:
+            pid = int(process.findtext("pid", "0"))
+            raw_name = process.findtext("process_name", "unknown")
+            name = os.path.basename(raw_name.replace("\\", "/")) or raw_name
+            used = process.findtext("used_memory", "0 MiB").split()[0]
+            found.append((name, pid, int(float(used) * 1024 ** 2)))
+        except (TypeError, ValueError):
+            continue
+    return sorted(found, key=lambda item: item[2], reverse=True)
+
+
+MINIMUM_CUDA_HEADROOM = 2 * 1024 ** 3
+
+
+def _display_memory(size: int) -> str:
+    if size >= 1024 ** 3:
+        return f"{size / 1024 ** 3:.1f} GB"
+    return f"{round(size / 1024 ** 2)} MB"
+
+
+def require_cuda_headroom(free: int, total: int, *, processes=None) -> None:
+    """Fail early with an actionable app list instead of a CUDA traceback."""
+    if not total or free >= MINIMUM_CUDA_HEADROOM:
+        return
+    processes = nvidia_processes() if processes is None else processes
+    lines = [
+        f"Only {_display_memory(free)} of {_display_memory(total)} VRAM is free.",
+        "GPU memory is currently being used by:",
+    ]
+    if processes:
+        lines.extend(f"- {name} (PID {pid}): {_display_memory(used)}"
+                     for name, pid, used in processes)
+    else:
+        lines.append("- another application (run nvidia-smi to identify it)")
+    lines.append("Close or restart those apps, then run PeerPixel again.")
+    raise RuntimeError("\n".join(lines))
+
+
 def _tried(probe, fallback):
     """Run a hardware probe, or answer with the fallback.
 
@@ -250,7 +302,16 @@ def cuda_group_options(*, total: int, free: int) -> dict:
     its first step. One synchronous block is still much faster than moving
     every leaf for every call in sequential offload.
     """
-    return {"non_blocking": False, "use_stream": False, "record_stream": False}
+    # The pipeline's VAE receives CUDA latents after the diffusion loop. Group
+    # offloading it leaves its convolution weights on CPU at that boundary,
+    # which crashes only after every denoising step has completed. Keeping the
+    # comparatively small decoder resident avoids the device mismatch.
+    return {
+        "non_blocking": False,
+        "use_stream": False,
+        "record_stream": False,
+        "exclude_modules": ["vae"],
+    }
 
 
 def _cuda_oom(error: BaseException) -> bool:
@@ -481,6 +542,11 @@ class Renderer:
 
         device, dtype, label, total = pick_device()
         self._device, self._dtype, self.accelerator = device, dtype, label
+        free = 0
+        if device == "cuda":
+            free, current_total = nvidia_memory()
+            total = total or current_total
+            require_cuda_headroom(free, total)
         _quieten()
         started = time.time()
         # `dtype`, not `torch_dtype`: the old spelling is deprecated and prints
@@ -495,8 +561,6 @@ class Renderer:
         # memory it has, something is already using it, and putting the whole
         # model on it is the way to turn that into an out-of-memory crash.
         if device == "cuda":
-            free, current_total = nvidia_memory()
-            total = total or current_total
             mode = self._forced_memory_mode or cuda_memory_mode(total=total, free=free)
             if mode == "sequential":
                 pipe.enable_sequential_cpu_offload()
@@ -583,7 +647,7 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.8.2"
+        runtime = "peerpixel-worker/0.8.3"
         return jpeg, {
             "enhancedPrompt": effective,
             "moderation": moderation,
