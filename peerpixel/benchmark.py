@@ -5,11 +5,17 @@ import time
 
 from . import api
 
+# Benchmarked at master size on purpose. A 128px draft would time in
+# milliseconds on anything and would not notice a card that cannot hold a
+# 1024px render at all, which is the failure that costs somebody a paid job.
 JOB = {
     "id": "bench",
     "prompt": "a lighthouse made of blown glass",
     "seed": 1,
     "steps": 4,
+    "operation": "master",
+    "width": 1024,
+    "height": 1024,
 }
 
 

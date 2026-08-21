@@ -26,6 +26,27 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(calls, ["AB12CD"])
         self.assertEqual(payload, {"paired": True, "deviceId": "dev-1"})
 
+    def test_a_driver_failure_during_pairing_answers_instead_of_killing_the_request(self):
+        """The reported Linux crash: a CUDA out-of-memory while naming the card
+        escaped the handler, the request thread died with a traceback, and the
+        person clicking Pair saw nothing at all."""
+
+        class AcceleratorError(Exception):
+            pass
+
+        app = DashboardApp(
+            pair=lambda code: (_ for _ in ()).throw(
+                AcceleratorError("CUDA error: out of memory")),
+            state=lambda: {},
+            start=lambda command: {},
+            stop=lambda: {},
+        )
+
+        status, payload = app.handle("POST", "/api/pair", {"code": "AB12CD"})
+
+        self.assertEqual(status, 500)
+        self.assertIn("out of memory", payload["error"])
+
     def test_pair_endpoint_rejects_an_empty_code(self):
         app = DashboardApp(
             pair=lambda code: self.fail("empty code reached pair service"),

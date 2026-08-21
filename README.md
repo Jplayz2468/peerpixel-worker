@@ -1,8 +1,14 @@
 # PeerPixel Worker
 
-Renders images for people whose computers cannot. You earn 90% of the pixels
-each image is worth, and they show up on your dashboard at
-[peerpixel.cc](https://peerpixel.cc).
+Renders images for people whose computers cannot. The pixels you earn show up
+on your dashboard at [peerpixel.cc](https://peerpixel.cc).
+
+There are two kinds of job. A **draft** is 128x128 at four steps: somebody is
+working out whether a composition is the one they wanted, and they are asking
+four times. It pays 0.1 pixel, all of it, and it never becomes a file: the JPEG
+goes back down this socket and is relayed straight to their browser. A
+**master** is 1024x1024 at four steps, conditioned on the draft they chose,
+which arrives over the same socket. It costs them 2 pixels and pays you 1.8.
 
 Runs on Windows, macOS and Linux. Setup opens a small dashboard in your browser,
 served only from this machine. After that it can run headless with no window.
@@ -54,8 +60,10 @@ Two more: `peerpixel status` prints the state of the pool, and
 
 ## Free work
 
-People without an account can ask for one 4-step draft at a time, up to 12 a
-day. Those jobs pay nothing and always queue behind paid ones.
+Somebody signed in can choose the free queue instead of their own balance: one
+candidate at a time, up to 12 a day. Those jobs pay nothing and always queue
+behind paid ones. A free master additionally needs the pool to have a machine
+left over afterwards, so unpaid work can never put a paying person in a queue.
 
 They only go to machines whose owner said yes:
 
@@ -77,11 +85,12 @@ which `setup.sh` installs for you.
 
 ## The code
 
-Eight short files, all plain Python:
+Nine short files, all plain Python:
 
 | | |
 | --- | --- |
 | `peerpixel/render.py` | runs the model - start here if an image looks wrong |
+| `peerpixel/relay.py` | the binary frame that carries draft and reference bytes |
 | `peerpixel/worker.py` | holds the connection, takes jobs |
 | `peerpixel/ui.py` | the live panel, and the plain lines when nobody is watching |
 | `peerpixel/api.py` | talks to peerpixel.cc |

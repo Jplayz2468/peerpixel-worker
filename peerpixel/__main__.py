@@ -40,8 +40,11 @@ def machine() -> dict:
 def cmd_pair(argv):
     if not argv:
         raise SystemExit("usage: peerpixel pair CODE   (get one from peerpixel.cc)")
-    renderer = Renderer()
-    result = api.pair(argv[0].upper(), {**machine(), "accelerator": renderer.accelerator})
+    # The name of the card, not a renderer: pairing must not depend on the GPU
+    # being free, and the machine somebody is pairing is often already busy.
+    from .render import describe_accelerator
+
+    result = api.pair(argv[0].upper(), {**machine(), "accelerator": describe_accelerator()})
     config.write(deviceId=result["deviceId"], token=result["token"], api=config.API)
     print(f"Paired as {machine()['name']}.")
     print(f"Saved to {config.FILE}")

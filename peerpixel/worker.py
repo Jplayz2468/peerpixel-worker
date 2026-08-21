@@ -12,7 +12,13 @@ import json
 import socket as sockets
 import time
 
-from . import api, config, dashboard_state, ui
+from . import api, config, dashboard_state, relay, ui
+
+#: What this install speaks. Version 1 rendered 512px and posted results over
+#: HTTP; it knew nothing of operations, transient drafts or reference images.
+#: The server hands drafts and masters only to version 2 and above, so an old
+#: install sits connected and idle until it is updated.
+PROTOCOL_VERSION = 2
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2
@@ -23,6 +29,58 @@ MODEL_IDLE_UNLOAD_SECONDS = 2 * 60 * 60
 
 def should_unload_model(last_active: float, current: float, *, loaded: bool) -> bool:
     return loaded and current - last_active >= MODEL_IDLE_UNLOAD_SECONDS
+
+
+def await_reference(link, job_id: str, *, timeout: float, clock=time.monotonic):
+    """Block until the chosen draft arrives for this master, or give up.
+
+    The dispatcher asks the browser for it the moment this job is claimed, so
+    the usual wait is one round trip. A browser that has closed means there is
+    no picture to render from, and the job fails and refunds rather than
+    quietly producing a different image from the same words.
+    """
+    deadline = clock() + timeout
+    while clock() < deadline:
+        try:
+            raw = link.recv(timeout=min(TICK, max(0.0, deadline - clock())))
+        except TimeoutError:
+            continue
+        frame = relay.decode(raw) if not isinstance(raw, str) else None
+        if not frame:
+            continue
+        header, payload = frame
+        if header.get("type") == "conditioning" and header.get("jobId") == job_id:
+            return payload
+    return None
+
+
+def await_settlement(link, job_id: str, *, timeout: float = 30.0, clock=time.monotonic):
+    """What the dispatcher paid for a draft it has just relayed.
+
+    Delivery to the browser is the completion boundary, so by the time this
+    answer arrives the money has already moved; this only reads back how much,
+    for the local earnings display. A missing answer is worth no wait: the
+    ledger is the truth and the next /api/me refresh will show it.
+    """
+    deadline = clock() + timeout
+    while clock() < deadline:
+        try:
+            raw = link.recv(timeout=min(TICK, max(0.0, deadline - clock())))
+        except TimeoutError:
+            continue
+        if not isinstance(raw, str):
+            continue
+        try:
+            message = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if message.get("jobId") != job_id:
+            continue
+        if message.get("type") == "result_accepted":
+            return message.get("earnedCredits", 0) or 0
+        if message.get("type") == "result_rejected":
+            raise RuntimeError(message.get("reason", "the result was not accepted"))
+    return 0
 
 
 def run(renderer, once: bool = False) -> int:
@@ -79,7 +137,8 @@ def run(renderer, once: bool = False) -> int:
             progress_sent_at[0] = current
         display.refresh()
 
-    url = config.API.replace("http", "ws", 1) + "/api/device/connect"
+    url = (config.API.replace("http", "ws", 1)
+           + f"/api/device/connect?protocol={PROTOCOL_VERSION}")
     headers = {"authorization": f"Bearer {settings['token']}", "user-agent": api.USER_AGENT}
     backoff = RECONNECT_MIN
 
@@ -129,6 +188,7 @@ def run(renderer, once: bool = False) -> int:
                             continue
 
                         job = message["job"]
+                        operation = job.get("operation", "master")
                         active_link[1:] = [job["id"]]
                         progress_sent_at[0] = 0.0
                         if getattr(renderer, "pipe", None) is None:
@@ -138,13 +198,50 @@ def run(renderer, once: bool = False) -> int:
                         status.begin(job["prompt"], int(job.get("steps", 0)))
                         publish(phase="rendering", connected=True, prompt=job["prompt"],
                                 step=0, steps=int(job.get("steps", 0)), elapsedSeconds=0)
-                        display.event(f"job {job['id']}  {job['steps']} steps")
+                        display.event(
+                            f"{operation} {job['id']}  "
+                            f"{job.get('width', '?')}px  {job['steps']} steps"
+                        )
                         started = time.time()
                         try:
-                            jpeg = renderer.render(job, on_step=stepped)
+                            # A master renders what the person actually chose,
+                            # so it waits for that picture to come down the
+                            # socket before it starts. Nothing is stored at
+                            # either end: the bytes are used and dropped.
+                            reference = None
+                            if job.get("reference"):
+                                publish(phase="rendering", connected=True,
+                                        prompt=job["prompt"], step=0,
+                                        steps=int(job.get("steps", 0)))
+                                reference = await_reference(
+                                    link, job["id"],
+                                    timeout=(job.get("referenceWaitMs") or 45000) / 1000,
+                                )
+                                if reference is None:
+                                    raise RuntimeError(
+                                        "the browser never sent the draft to render from"
+                                    )
+
+                            jpeg = renderer.render(job, on_step=stepped, reference=reference)
                             dashboard_state.save_preview(jpeg)
-                            result = api.submit_result(job["id"], jpeg)
-                            earned = result.get("earnedCredits", 0) or 0
+
+                            if job.get("transient"):
+                                # A draft has no permanent home. It goes back
+                                # down this socket and the dispatcher relays it
+                                # straight to the browser waiting for it.
+                                if len(jpeg) > relay.MAX_RESULT_BYTES:
+                                    raise RuntimeError(
+                                        f"draft is {len(jpeg)} bytes, over the "
+                                        f"{relay.MAX_RESULT_BYTES} limit"
+                                    )
+                                link.send(relay.encode(
+                                    {"type": "draft_result", "draftId": job["id"]}, jpeg))
+                                earned = await_settlement(link, job["id"])
+                            else:
+                                result = api.submit_result(job["id"], jpeg)
+                                earned = result.get("earnedCredits", 0) or 0
+                                link.send(json.dumps({"type": "finished", "jobId": job["id"]}))
+
                             earned_pixels += earned
                             status.finish(earned)
                             elapsed = time.monotonic() - session_started
@@ -157,7 +254,6 @@ def run(renderer, once: bool = False) -> int:
                             display.event(
                                 f"done in {time.time() - started:.1f}s  +{earned:g} pixels"
                             )
-                            link.send(json.dumps({"type": "finished", "jobId": job["id"]}))
                             last_beat = time.monotonic()
                             if once:
                                 return status.images
@@ -166,7 +262,9 @@ def run(renderer, once: bool = False) -> int:
                             publish(phase="online", connected=True, prompt="", step=0, steps=0,
                                     elapsedSeconds=0, error=str(error))
                             display.event(f"failed: {error}")
-                            link.send(json.dumps({"type": "failed", "jobId": job["id"]}))
+                            link.send(json.dumps({
+                                "type": "failed", "jobId": job["id"], "reason": str(error)[:200],
+                            }))
             except Exception as error:  # noqa: BLE001 - every disconnect is temporary
                 active_link[0] = None
                 status.state = "offline"

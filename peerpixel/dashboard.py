@@ -95,13 +95,15 @@ class CommandRunner:
 
 
 def pair_machine(code):
-    from .render import Renderer
+    # Only the hardware's name is wanted here, not a renderer. Constructing one
+    # probes the card, and a card that is busy -- very often this machine's own
+    # worker holding the model -- used to make pairing fail with a CUDA error.
+    from .render import describe_accelerator
 
-    renderer = Renderer()
     info = {
         "name": socket.gethostname(),
         "platform": f"{platform.system().lower()}-{platform.machine()}",
-        "accelerator": renderer.accelerator,
+        "accelerator": describe_accelerator(),
     }
     result = api.pair(code, info)
     config.write(deviceId=result["deviceId"], token=result["token"], api=config.API)
@@ -143,6 +145,12 @@ class DashboardApp:
             return 404, {"error": "Not found"}
         except (api.ApiError, ValueError) as error:
             return 400, {"error": str(error)}
+        except Exception as error:  # noqa: BLE001
+            # Anything else is a bug or a broken machine: a driver that will not
+            # initialise, a disk that will not write. The person clicking the
+            # button still deserves a sentence rather than a dead connection and
+            # a traceback in a terminal they may not be looking at.
+            return 500, {"error": f"{type(error).__name__}: {error}"}
 
 
 RUNNER = CommandRunner()
@@ -226,7 +234,10 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, json.JSONDecodeError):
             body = {}
-        status, payload = self.app.handle(method, self.path, body)
+        try:
+            status, payload = self.app.handle(method, self.path, body)
+        except Exception as error:  # noqa: BLE001 - the socket must be answered
+            status, payload = 500, {"error": f"{type(error).__name__}: {error}"}
         data = json.dumps(payload).encode()
         self.send_response(status)
         self.send_header("content-type", "application/json")
