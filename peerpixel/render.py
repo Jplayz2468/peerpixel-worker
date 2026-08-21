@@ -216,6 +216,28 @@ def describe_accelerator() -> str:
         return "unknown"
 
 
+def cuda_memory_mode(*, total: int, free: int) -> str:
+    """Fastest placement that leaves useful activation headroom.
+
+    Consumer cards use streamed block groups. Whole-model offload still has to
+    place the complete 4B transformer on the card at once, which is why a 16GB
+    5080 can OOM despite the weights themselves being smaller than the card.
+    """
+    if total >= 24e9 and free >= 20e9:
+        return "resident"
+    return "group"
+
+
+def _cuda_oom(error: BaseException) -> bool:
+    try:
+        import torch
+        if isinstance(error, torch.OutOfMemoryError):
+            return True
+    except Exception:
+        pass
+    return "cuda" in str(error).lower() and "out of memory" in str(error).lower()
+
+
 def _quieten() -> None:
     """Stop the libraries drawing over the bar.
 
@@ -422,6 +444,8 @@ class Renderer:
         self._enhancer = None
         self._safety = None
         self._device, self._dtype, self.accelerator, self._total = pick_device()
+        self._memory_mode = None
+        self._forced_memory_mode = None
 
     def warm(self):
         """Load once and keep it. A 4B model takes tens of seconds to load."""
@@ -445,10 +469,30 @@ class Renderer:
         # An unknown size counts as small. If the card would not say how much
         # memory it has, something is already using it, and putting the whole
         # model on it is the way to turn that into an out-of-memory crash.
-        if device == "cuda" and (not total or total < 24e9):
-            pipe.enable_model_cpu_offload()
+        if device == "cuda":
+            free = _tried(lambda: torch.cuda.mem_get_info()[0], 0)
+            mode = self._forced_memory_mode or cuda_memory_mode(total=total, free=free)
+            if mode == "sequential":
+                pipe.enable_sequential_cpu_offload()
+            elif mode == "group":
+                # One block per group keeps even 12GB cards below their limit.
+                # A separate CUDA stream overlaps the next transfer with the
+                # current block's compute, avoiding sequential-offload speed.
+                pipe.enable_group_offload(
+                    onload_device=torch.device("cuda"),
+                    offload_device=torch.device("cpu"),
+                    offload_type="block_level",
+                    num_blocks_per_group=1,
+                    non_blocking=True,
+                    use_stream=True,
+                    record_stream=False,
+                )
+            else:
+                pipe.to(device)
+            self._memory_mode = mode
         else:
             pipe.to(device)
+            self._memory_mode = "resident"
         pipe.set_progress_bar_config(disable=True)
 
         # Decoding is one unbounded call over the whole picture, and at 1024px
@@ -514,7 +558,7 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.7.1"
+        runtime = "peerpixel-worker/0.7.2"
         return jpeg, {
             "enhancedPrompt": effective,
             "moderation": moderation,
@@ -561,16 +605,26 @@ class Renderer:
         """Release the loaded pipeline after a very long idle spell."""
         if self.pipe is None:
             return
+        old = self.pipe
         self.pipe = None
         self._loaded_adapters.clear()
+        del old
         try:
+            import gc
             import torch
+            gc.collect()
             if self._device == "cuda":
                 torch.cuda.empty_cache()
             elif self._device == "mps":
                 torch.mps.empty_cache()
         except Exception:  # noqa: BLE001 - cleanup is best effort
             pass
+
+    def _retry_low_memory(self) -> None:
+        """Reload with the guaranteed-fit CUDA fallback after one real OOM."""
+        self._forced_memory_mode = "sequential"
+        self.unload()
+        self.warm()
 
     def render(self, job: dict, on_step=None, reference: bytes | None = None,
                on_demote=None, on_decode=None) -> bytes:
@@ -582,6 +636,13 @@ class Renderer:
         using the precision that caused it.
         """
         try:
+            return self._render(job, on_step=on_step, on_decode=on_decode)
+        except RuntimeError as error:
+            if self._device != "cuda" or self._memory_mode == "sequential" or not _cuda_oom(error):
+                raise
+            if on_demote is not None:
+                on_demote("low-memory CUDA")
+            self._retry_low_memory()
             return self._render(job, on_step=on_step, on_decode=on_decode)
         except _Nonsense:
             chosen = self.demote()

@@ -192,6 +192,26 @@ class MasterTests(unittest.TestCase):
             {"prompt": "x", "seed": 7, "operation": "master"}, reference=a_jpeg((256, 256)))
         self.assertNotIn("image", pipe.calls[0])
 
+    def test_cuda_oom_reloads_once_in_the_guaranteed_low_memory_mode(self):
+        import torch
+
+        renderer = object.__new__(render.Renderer)
+        renderer._device = "cuda"
+        renderer._memory_mode = "group"
+        attempts, fallback = [], []
+
+        def attempt(*_args, **_kwargs):
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise torch.OutOfMemoryError("CUDA out of memory")
+            return b"jpeg"
+
+        renderer._render = attempt
+        renderer._retry_low_memory = lambda: fallback.append(True)
+        self.assertEqual(renderer.render({"operation": "master"}), b"jpeg")
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(fallback, [True])
+
 
 class GuidanceTests(unittest.TestCase):
     """The whole point of the base checkpoint.

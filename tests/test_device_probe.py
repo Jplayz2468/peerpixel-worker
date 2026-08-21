@@ -115,6 +115,13 @@ class OffloadPolicyTests(unittest.TestCase):
         self.assertFalse(self.offloads("cuda", 48e9))
         self.assertFalse(self.offloads("mps", 0))
 
+    def test_cuda_memory_strategy_uses_fast_group_offload_on_consumer_cards(self):
+        from peerpixel.render import cuda_memory_mode
+
+        self.assertEqual(cuda_memory_mode(total=16e9, free=14e9), "group")
+        self.assertEqual(cuda_memory_mode(total=12e9, free=10e9), "group")
+        self.assertEqual(cuda_memory_mode(total=48e9, free=40e9), "resident")
+
 
 if __name__ == "__main__":
     unittest.main()
