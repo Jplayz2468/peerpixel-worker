@@ -48,16 +48,27 @@ CHUNK = 256 * 1024
 
 
 def installed() -> str:
+    """Which version this folder is, from the file an update actually replaces.
+
+    pyproject first, on purpose. The obvious source is the installed package's
+    metadata, and it is wrong here: an update swaps the files in this folder but
+    the metadata in `.venv` only changes if the project is reinstalled, which
+    `uv sync` has no reason to do when the dependencies have not moved. A
+    checkout at 0.6.0 was reporting 0.1.0 from a venv built months earlier --
+    which would have every worker install an update it already had, once, on
+    every clean start.
+    """
+    try:
+        pyproject = (ROOT / "pyproject.toml").read_text()
+        found = re.search(r'(?m)^version\s*=\s*"([^"]+)"', pyproject)
+        if found:
+            return found.group(1)
+    except OSError:
+        pass
     try:
         return metadata.version("peerpixel")
     except metadata.PackageNotFoundError:
-        pass
-    try:
-        pyproject = (ROOT / "pyproject.toml").read_text()
-    except OSError:
         return "0"
-    found = re.search(r'(?m)^version\s*=\s*"([^"]+)"', pyproject)
-    return found.group(1) if found else "0"
 
 
 def parts(version: str) -> tuple[int, int, int]:

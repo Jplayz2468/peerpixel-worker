@@ -5,6 +5,7 @@ that unpacks somebody else's zip onto this disk.
 """
 from __future__ import annotations
 
+import re
 import tempfile
 import unittest
 import zipfile
@@ -25,6 +26,28 @@ class VersionTests(unittest.TestCase):
 
     def test_nothing_is_not_newer_than_something(self):
         self.assertFalse(updater.newer("", "0.1.0"))
+
+
+class InstalledVersionTests(unittest.TestCase):
+    def test_the_version_comes_from_the_file_an_update_replaces(self):
+        """pyproject, not the venv's package metadata.
+
+        An update swaps the files in this folder; the metadata in .venv only
+        changes if the project is reinstalled, which uv sync has no reason to
+        do when the dependencies have not moved. Reading the stale one had a
+        0.6.0 checkout reporting 0.1.0 -- so every worker would install an
+        update it already had, once, on every clean start.
+        """
+        from peerpixel import updater as module
+
+        pyproject = (module.ROOT / "pyproject.toml").read_text()
+        declared = re.search(r'(?m)^version\s*=\s*"([^"]+)"', pyproject).group(1)
+        self.assertEqual(module.installed(), declared)
+
+    def test_this_checkout_does_not_think_it_needs_its_own_release(self):
+        # The loop guard would catch it after one cycle; not doing it at all is
+        # better than being rescued from it.
+        self.assertFalse(updater.newer(f"v{updater.installed()}", updater.installed()))
 
 
 class AssetTests(unittest.TestCase):
