@@ -471,6 +471,15 @@ def cmd_doctor(_argv: list[str]) -> None:
 def cmd_help(_argv: list[str]) -> None:
     banner()
     say()
+
+
+def cmd_licenses(_argv: list[str]) -> None:
+    """Display the model notices shipped beside the worker."""
+    notices = runtime.ROOT / "THIRD_PARTY_NOTICES.txt"
+    license_file = runtime.ROOT / "APACHE-2.0.txt"
+    title("Third-party model notices")
+    block(notices.read_text(encoding="utf-8"))
+    note(f"Full Apache 2.0 terms: {license_file}")
     note("Run `peerpixel` on its own and it does the right thing: it sets the "
          "machine up if it needs it, then renders until you stop it.")
     say()
@@ -493,6 +502,7 @@ HELP = (
     ("peerpixel settings", "list or change the knobs"),
     ("peerpixel doctor", "what this machine is, and a test render"),
     ("peerpixel update", "fetch and install a newer worker"),
+    ("peerpixel licenses", "model licenses and third-party notices"),
 )
 
 COMMANDS = {
@@ -506,6 +516,7 @@ COMMANDS = {
     "config": cmd_settings,
     "status": cmd_status,
     "update": cmd_update,
+    "licenses": cmd_licenses,
     "doctor": cmd_doctor,
     "help": cmd_help,
 }

@@ -27,10 +27,12 @@ from .console import DIM, OFF, clock, say, step_line
 #: preview and a 512px final, conditioned on the preview handed back over the
 #: socket. Version 5 renders a final from its seed alone: nothing is sent back,
 #: and a version-4 worker would sit waiting forty-five seconds for conditioning
-#: bytes that are never coming and then fail the job. The server therefore
+#: bytes that are never coming and then fail the job. Version 6 adds pinned
+#: style recipes, optional Qwen enhancement and mandatory moderation evidence.
+#: The server therefore
 #: gives work only to the current version, and an old install sits connected,
 #: idle and unpaid until it is updated.
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2
@@ -313,9 +315,21 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
             # tab no longer costs somebody the render they paid for.
             bar.begin("render", detail=job["prompt"][:80])
             render_started = time.monotonic()
-            jpeg = renderer.render(job, on_step=stepped,
-                                   on_decode=lambda: bar.begin("decode"),
-                                   on_demote=lambda name: bar.note(f"retrying in {name}"))
+            render_options = {
+                "on_step": stepped,
+                "on_decode": lambda: bar.begin("decode"),
+                "on_demote": lambda name: bar.note(f"retrying in {name}"),
+            }
+            if hasattr(renderer, "generate_job"):
+                jpeg, evidence = renderer.generate_job(job, **render_options)
+            else:  # small test doubles and third-party renderer integrations
+                jpeg = renderer.render(job, **render_options)
+                evidence = {
+                    "enhancedPrompt": job["prompt"],
+                    "moderation": {"label": "normal", "nsfwScore": 0.0},
+                    "manifestVersion": job.get("manifestVersion", "2026-08-21.1"),
+                    "recipeId": job.get("recipeId", "photoreal-v1"),
+                }
             session.learn(operation, time.monotonic() - render_started, steps)
             bar.begin("deliver")
             if settings.keep_last():
@@ -337,10 +351,14 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 if len(jpeg) > relay.MAX_RESULT_BYTES:
                     raise RuntimeError(f"the preview is {len(jpeg)} bytes, over the "
                                        f"{relay.MAX_RESULT_BYTES} limit")
-                link.send(relay.encode({"type": "draft_result", "draftId": job["id"]}, jpeg))
+                link.send(relay.encode({
+                    "type": "draft_result", "draftId": job["id"], **evidence,
+                }, jpeg))
                 earned = await_settlement(link, job["id"])
             else:
-                result = api.submit_result(job["id"], jpeg)
+                result = api.submit_result(job["id"], relay.encode({
+                    "type": "master_result", "jobId": job["id"], **evidence,
+                }, jpeg))
                 earned = result.get("earnedCredits", 0) or 0
                 link.send(json.dumps({"type": "finished", "jobId": job["id"]}))
             bar.finish()

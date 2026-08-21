@@ -111,6 +111,12 @@ OPERATIONS = {
 #: What may arrive over the wire. `bench` is local, and a job claiming to be one
 #: would be four steps of work submitted for a fifty-step price.
 NETWORK_OPERATIONS = ("draft", "master", "verify")
+MANIFEST_VERSION = "2026-08-21.1"
+STYLE_RECIPES = {
+    "photoreal": ("photoreal-v1", (("rebelmidjourney", 0.65),)),
+    "anime": ("anime-v1", (("rebelmidjourney", 0.20), ("flux-klein-art", 0.85))),
+    "vector": ("vector-v1", (("simplefinevector", 1.00),)),
+}
 
 
 #: Precision, by name, so a machine that renders badly in one has somewhere to
@@ -402,6 +408,9 @@ class Renderer:
 
     def __init__(self):
         self.pipe = None
+        self._loaded_adapters = set()
+        self._enhancer = None
+        self._safety = None
         self._device, self._dtype, self.accelerator, self._total = pick_device()
 
     def warm(self):
@@ -449,6 +458,55 @@ class Renderer:
         self.pipe = pipe
         self.load_seconds = time.time() - started
 
+    def apply_style(self, job: dict) -> None:
+        """Load the exact LoRA recipe lazily and activate only its adapters."""
+        from . import model_cache
+
+        style = job.get("style", "photoreal")
+        recipe = STYLE_RECIPES.get(style)
+        if recipe is None:
+            raise ValueError(f"unknown_style:{style}")
+        recipe_id, adapters = recipe
+        if job.get("recipeId", recipe_id) != recipe_id:
+            raise ValueError("wrong_style_recipe")
+        if job.get("manifestVersion", MANIFEST_VERSION) != MANIFEST_VERSION:
+            raise ValueError("wrong_model_manifest")
+        for name, _weight in adapters:
+            if name in self._loaded_adapters:
+                continue
+            path = model_cache.ensure(name)
+            self.pipe.load_lora_weights(
+                str(path.parent), weight_name=path.name, adapter_name=name,
+            )
+            self._loaded_adapters.add(name)
+        self.pipe.set_adapters(
+            [name for name, _weight in adapters],
+            adapter_weights=[weight for _name, weight in adapters],
+        )
+
+    def generate_job(self, job: dict, **render_options):
+        """Polish, style, render, then classify locally in that exact order."""
+        from .prompt_enhancer import PromptEnhancer
+        from .safety import SafetyClassifier
+
+        if self._enhancer is None:
+            self._enhancer = PromptEnhancer()
+        effective = self._enhancer.enhance(
+            job["prompt"], job.get("style", "photoreal"),
+            enabled=job.get("enhance", True), resolved=job.get("enhancedPrompt"),
+        )
+        resolved = {**job, "prompt": effective}
+        jpeg = self.render(resolved, **render_options)
+        if self._safety is None:
+            self._safety = SafetyClassifier()
+        moderation = self._safety.classify(jpeg)
+        return jpeg, {
+            "enhancedPrompt": effective,
+            "moderation": moderation,
+            "manifestVersion": job.get("manifestVersion", MANIFEST_VERSION),
+            "recipeId": STYLE_RECIPES[job.get("style", "photoreal")][0],
+        }
+
     def demote(self) -> str | None:
         """Give up on this precision and take the next one down. Returns its name.
 
@@ -475,6 +533,7 @@ class Renderer:
         if self.pipe is None:
             return
         self.pipe = None
+        self._loaded_adapters.clear()
         try:
             import torch
             if self._device == "cuda":
@@ -510,6 +569,8 @@ class Renderer:
     def _render(self, job: dict, on_step=None, on_decode=None) -> bytes:
         self.warm()
         spec = operation_of(job)
+        if spec["name"] != "bench" and ("style" in job or "recipeId" in job):
+            self.apply_style(job)
         width, height, steps = spec["width"], spec["height"], spec["steps"]
 
         # The seed is the whole of the relationship between a preview and its

@@ -60,8 +60,8 @@ def submit_bench(ms: int, accelerator: str) -> dict:
     return _call("/api/device/bench", method="POST", payload={"ms": ms, "accelerator": accelerator})
 
 
-def submit_result(job_id: str, jpeg: bytes) -> dict:
-    return _call(f"/api/device/job/{job_id}/result", method="POST", raw=jpeg, timeout=300)
+def submit_result(job_id: str, frame: bytes) -> dict:
+    return _call(f"/api/device/job/{job_id}/result", method="POST", raw=frame, timeout=300)
 
 
 def verify_asset(check_id: str, which: str) -> bytes:

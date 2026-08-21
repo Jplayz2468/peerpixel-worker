@@ -12,6 +12,7 @@ dependencies = [
   "pillow>=10",
   "huggingface-hub>=0.30",
   "websockets>=13",
+  "zstandard>=0.23",
 ]
 
 [project.scripts]
@@ -27,3 +28,7 @@ managed = true
 [tool.hatch.build.targets.wheel]
 # Explicit, so the interface files under peerpixel/ui travel with the package.
 packages = ["peerpixel"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"APACHE-2.0.txt" = "APACHE-2.0.txt"
+"THIRD_PARTY_NOTICES.txt" = "THIRD_PARTY_NOTICES.txt"
