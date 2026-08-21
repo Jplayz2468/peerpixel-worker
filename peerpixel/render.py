@@ -35,6 +35,10 @@ MODEL = os.environ.get("PEERPIXEL_MODEL", "black-forest-labs/FLUX.2-klein-4B")
 OPERATIONS = {
     "draft": {"width": 128, "height": 128, "steps": 4},
     "master": {"width": 1024, "height": 1024, "steps": 4},
+    # A check is a master rendered a second time on a machine the operator
+    # owns, so it is the same work with the same inputs. Only what happens to
+    # the result differs: it is compared rather than delivered.
+    "verify": {"width": 1024, "height": 1024, "steps": 4},
 }
 
 
@@ -224,7 +228,7 @@ class Renderer:
         # ordinary render at the master's size, which is what a probe is and
         # what a browser that lost its own copy falls back to.
         conditioning = {}
-        if spec["name"] == "master" and reference:
+        if spec["name"] in ("master", "verify") and reference:
             source = Image.open(io.BytesIO(reference))
             conditioning["image"] = [upscale_reference(source, (width, height))]
 

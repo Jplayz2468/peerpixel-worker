@@ -8,11 +8,12 @@ cupboard is a perfectly good peer.
 """
 from __future__ import annotations
 
+import base64
 import json
 import socket as sockets
 import time
 
-from . import api, config, dashboard_state, relay, ui
+from . import api, compare, config, dashboard_state, relay, ui
 
 #: What this install speaks. Version 1 rendered 512px and posted results over
 #: HTTP; it knew nothing of operations, transient drafts or reference images.
@@ -221,6 +222,40 @@ def run(renderer, once: bool = False) -> int:
                                     raise RuntimeError(
                                         "the browser never sent the draft to render from"
                                     )
+
+                            if operation == "verify":
+                                # A check is preemptible: the moment real work
+                                # turns up with no machine free to take it, the
+                                # dispatcher takes this one back. Nobody is
+                                # paid for a check, so an abandoned one costs
+                                # nothing and simply runs again later.
+                                # This machine belongs to the operator and is
+                                # re-rendering somebody else's finished job to
+                                # check it. Both pictures are fetched rather
+                                # than pushed: nobody is waiting on this and
+                                # the bytes are already in storage.
+                                reference = None
+                                if job.get("reference"):
+                                    reference = api.verify_asset(job["id"], "reference")
+                                jpeg = renderer.render(job, on_step=stepped, reference=reference)
+                                subject = api.verify_asset(job["id"], "subject")
+                                measurements = compare.compare(subject, jpeg)
+                                measurements["image"] = base64.b64encode(jpeg).decode()
+                                api.submit_verification(job["id"], measurements)
+                                display.event(
+                                    f"checked {job['id'][:6]}  "
+                                    f"distance {measurements['distance']}  "
+                                    f"rmse {measurements['rmse']}"
+                                )
+                                link.send(json.dumps({"type": "finished", "jobId": job["id"]}))
+                                earned = 0.0
+                                status.finish(earned)
+                                publish(phase="online", connected=True, prompt="", step=0,
+                                        steps=0, elapsedSeconds=0)
+                                last_beat = time.monotonic()
+                                if once:
+                                    return status.images
+                                continue
 
                             jpeg = renderer.render(job, on_step=stepped, reference=reference)
                             dashboard_state.save_preview(jpeg)

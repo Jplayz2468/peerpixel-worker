@@ -64,6 +64,27 @@ def submit_result(job_id: str, jpeg: bytes) -> dict:
     return _call(f"/api/device/job/{job_id}/result", method="POST", raw=jpeg, timeout=300)
 
 
+def verify_asset(check_id: str, which: str) -> bytes:
+    """One of the two pictures a check compares. Raw bytes, not JSON."""
+    import urllib.request
+
+    token = config.read().get("token", "")
+    request = urllib.request.Request(
+        f"{config.API}/api/device/verify/{check_id}/{which}",
+        headers={"user-agent": USER_AGENT, "authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        raise ApiError(error.code, "verify_asset_failed") from None
+
+
+def submit_verification(check_id: str, measurements: dict) -> dict:
+    return _call(f"/api/device/verify/{check_id}/result", method="POST",
+                 payload=measurements, timeout=120)
+
+
 def set_free(device_id: str, allow: bool) -> dict:
     """Opt this machine in or out of unpaid work.
 
