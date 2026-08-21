@@ -96,7 +96,7 @@ class ProtocolVersionTests(unittest.TestCase):
 
         self.assertEqual(
             worker.status_line(session, "online, waiting for work", hardware),
-            "online, waiting for work · 2 images · CPU 12% · RAM 4/8 GB",
+            "CPU 12% · RAM 4/8 GB · online, waiting for work · 2 images",
         )
 
 

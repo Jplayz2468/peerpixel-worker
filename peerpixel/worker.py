@@ -168,7 +168,7 @@ def _bench_per_step() -> float:
 
 def status_line(session: Session, state: str, hardware: SystemStatus) -> str:
     """The idle line combines worker state with local machine health."""
-    return f"{session.line(state)} · {hardware.line()}"
+    return f"{hardware.line()} · {session.line(state)}"
 
 
 def run(renderer, once: bool = False) -> int:
@@ -370,7 +370,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                             "attestations": [{"operation": "upscale",
                                 "inputDigest": hashlib.sha256(source).hexdigest(),
                                 "outputDigest": hashlib.sha256(jpeg).hexdigest(),
-                                "runtimeVersion": "peerpixel-worker/0.8.0"}]}
+                                "runtimeVersion": "peerpixel-worker/0.8.1"}]}
             elif hasattr(renderer, "generate_job"):
                 jpeg, evidence = renderer.generate_job(job, **render_options)
             else:  # small test doubles and third-party renderer integrations
