@@ -109,7 +109,7 @@ def fetch_model() -> None:
 
 
 def benchmark() -> dict:
-    from .benchmark import run_benchmark
+    from .benchmark import estimated_master_ms, likely_generation_work, run_benchmark
     from .render import Renderer
 
     def work(made):
@@ -140,6 +140,11 @@ def benchmark() -> dict:
         problem("This machine is not fast enough to keep people waiting, so the "
                 "network will not send it work.")
         note("Nothing is wrong with it. It is just slower than a render can afford.")
+    elif not likely_generation_work(ms):
+        estimate = estimated_master_ms(ms)
+        note(f"A full high-resolution render is estimated at about {estimate / 1000:.0f}s. "
+             "Faster machines are preferred, so this machine may earn few generation "
+             "credits; it remains useful for drafts, verification and upscaling.")
     return result
 
 

@@ -19,7 +19,9 @@ class SafetyClassifier:
         from . import model_cache
 
         path = self.model_path or model_cache.ensure_directory("nsfw-image-detection")
-        self.classifier = pipeline("image-classification", model=path, device_map="auto")
+        # This network is small enough for CPU inference and must not displace
+        # FLUX or its VAE from scarce accelerator/unified memory after render.
+        self.classifier = pipeline("image-classification", model=path, device=-1)
 
     def classify(self, jpeg: bytes) -> dict:
         self.warm()

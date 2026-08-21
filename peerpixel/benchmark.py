@@ -18,12 +18,22 @@ from . import api
 from .render import OPERATIONS
 
 BENCH_STEPS = OPERATIONS["bench"]["steps"]
+GENERATION_TARGET_MS = 60_000
 JOB = {
     "id": "bench",
     "prompt": "a lighthouse made of blown glass",
     "seed": 1,
     "operation": "bench",
 }
+
+
+def estimated_master_ms(bench_ms: int) -> int:
+    """Project the short steady-state sample to a fifty-step master."""
+    return round(max(0, bench_ms) * OPERATIONS["master"]["steps"] / BENCH_STEPS)
+
+
+def likely_generation_work(bench_ms: int) -> bool:
+    return estimated_master_ms(bench_ms) <= GENERATION_TARGET_MS
 
 
 def run_benchmark(renderer, *, submit=api.submit_bench, clock=time.time,

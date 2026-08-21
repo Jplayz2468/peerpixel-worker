@@ -506,12 +506,15 @@ class Renderer:
             enabled=job.get("enhance", True), resolved=job.get("enhancedPrompt"),
             variation=job.get("seed") if job.get("operation") == "draft" else None,
         )
+        # Enhancement is complete before inference. Do not retain Qwen's
+        # tensors while the much larger FLUX pipeline and VAE need the memory.
+        self._enhancer.unload()
         resolved = {**job, "prompt": effective}
         jpeg = self.render(resolved, **render_options)
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.7.0"
+        runtime = "peerpixel-worker/0.7.1"
         return jpeg, {
             "enhancedPrompt": effective,
             "moderation": moderation,

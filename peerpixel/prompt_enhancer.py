@@ -38,7 +38,11 @@ class PromptEnhancer:
 
         path = self.model_path or model_cache.ensure_directory("qwen3-0.6b")
         self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
-        self.model = AutoModelForCausalLM.from_pretrained(path, local_files_only=True, device_map="auto")
+        # Keep the small language model on CPU. On Apple silicon, "auto" puts
+        # it in unified GPU memory beside FLUX; the resulting pressure makes
+        # the last diffusion step and VAE decode swap for minutes.
+        self.model = AutoModelForCausalLM.from_pretrained(
+            path, local_files_only=True, device_map="cpu")
 
     def enhance(self, prompt: str, style: str, *, enabled=True, resolved=None, variation=None) -> str:
         if resolved:
@@ -63,3 +67,7 @@ class PromptEnhancer:
     def unload(self):
         self.tokenizer = None
         self.model = None
+        # Drop large tensor storage before FLUX starts. This matters most on
+        # unified-memory Macs, where CPU and MPS allocations share one pool.
+        import gc
+        gc.collect()

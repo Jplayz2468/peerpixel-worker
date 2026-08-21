@@ -1,6 +1,6 @@
 import unittest
 
-from peerpixel.benchmark import BENCH_STEPS, JOB, run_benchmark
+from peerpixel.benchmark import BENCH_STEPS, JOB, estimated_master_ms, likely_generation_work, run_benchmark
 from peerpixel.render import NETWORK_OPERATIONS, OPERATIONS
 
 
@@ -24,6 +24,12 @@ class FakeRenderer:
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_short_sample_predicts_full_master_and_warns_without_rejecting(self):
+        self.assertEqual(estimated_master_ms(4_000), 50_000)
+        self.assertTrue(likely_generation_work(4_000))
+        self.assertEqual(estimated_master_ms(8_000), 100_000)
+        self.assertFalse(likely_generation_work(8_000))
+
     def test_only_second_render_is_timed_and_submitted(self):
         renderer = FakeRenderer()
         submitted = []

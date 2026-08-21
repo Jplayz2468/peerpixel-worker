@@ -1,13 +1,54 @@
 import inspect
+import sys
+import types
 import unittest
 from unittest import mock
 
 from peerpixel.prompt_enhancer import PromptEnhancer, SYSTEM_INSTRUCTION, enhancement_messages
-from peerpixel.safety import THRESHOLD
+from peerpixel.safety import SafetyClassifier, THRESHOLD
 from peerpixel.render import Renderer
 
 
 class StyledPipelineTests(unittest.TestCase):
+    def test_auxiliary_models_stay_on_cpu_instead_of_competing_with_flux_on_mps(self):
+        enhancer = PromptEnhancer(model_path="/models/qwen")
+        fake_model = object()
+        with mock.patch("transformers.AutoTokenizer.from_pretrained", return_value=object()), \
+             mock.patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=fake_model) as load:
+            enhancer.warm()
+        self.assertEqual(load.call_args.kwargs["device_map"], "cpu")
+
+        safety = SafetyClassifier(model_path="/models/safety")
+        pipeline = mock.Mock(return_value=object())
+        fake_transformers = types.SimpleNamespace(pipeline=pipeline)
+        with mock.patch.dict(sys.modules, {"transformers": fake_transformers}):
+            safety.warm()
+        self.assertEqual(pipeline.call_args.kwargs["device"], -1)
+
+    def test_prompt_model_is_released_before_flux_uses_the_accelerator(self):
+        events = []
+
+        class Enhancer:
+            def enhance(self, *_args, **_kwargs):
+                events.append("enhance")
+                return "polished"
+            def unload(self):
+                events.append("release_prompt_model")
+
+        class Safety:
+            def classify(self, _jpeg):
+                events.append("moderate")
+                return {"label": "normal", "nsfwScore": 0.0}
+
+        renderer = object.__new__(Renderer)
+        renderer._enhancer, renderer._safety = Enhancer(), Safety()
+        renderer.render = lambda *_args, **_kwargs: events.append("render") or b"jpeg"
+        renderer.generate_job({
+            "prompt": "fox", "style": "anime", "operation": "draft", "seed": 7,
+            "recipeId": "anime-v1", "manifestVersion": "2026-08-21.1",
+        })
+        self.assertEqual(events, ["enhance", "release_prompt_model", "render", "moderate"])
+
     def test_prompt_enhancer_accepts_a_per_draft_variation(self):
         parameters = inspect.signature(PromptEnhancer.enhance).parameters
         self.assertIn("variation", parameters)
