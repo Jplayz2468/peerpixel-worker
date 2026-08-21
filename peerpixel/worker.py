@@ -370,7 +370,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                             "attestations": [{"operation": "upscale",
                                 "inputDigest": hashlib.sha256(source).hexdigest(),
                                 "outputDigest": hashlib.sha256(jpeg).hexdigest(),
-                                "runtimeVersion": "peerpixel-worker/0.8.1"}]}
+                                "runtimeVersion": "peerpixel-worker/0.8.2"}]}
             elif hasattr(renderer, "generate_job"):
                 jpeg, evidence = renderer.generate_job(job, **render_options)
             else:  # small test doubles and third-party renderer integrations

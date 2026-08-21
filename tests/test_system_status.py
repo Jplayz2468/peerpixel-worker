@@ -24,10 +24,13 @@ class SystemStatusTests(unittest.TestCase):
         memory = SimpleNamespace(total=32 * GIB, available=20 * GIB)
         psutil = SimpleNamespace(cpu_percent=lambda interval=None: 12.4,
                                  virtual_memory=lambda: memory)
-        cuda = SimpleNamespace(is_available=lambda: True,
-                               mem_get_info=lambda: (6 * GIB, 16 * GIB))
+        cuda = SimpleNamespace(
+            is_available=lambda: True,
+            mem_get_info=lambda: (_ for _ in ()).throw(
+                AssertionError("the display must not enter the CUDA runtime")),
+        )
         torch = SimpleNamespace(cuda=cuda)
-        completed = subprocess.CompletedProcess([], 0, "47, 62\n", "")
+        completed = subprocess.CompletedProcess([], 0, "47, 62, 10240, 16384\n", "")
         renderer = SimpleNamespace(_device="cuda", _memory_mode="group")
 
         line = SystemStatus(renderer, psutil_module=psutil, torch_module=torch,

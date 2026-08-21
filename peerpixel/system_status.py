@@ -68,23 +68,20 @@ class SystemStatus:
         return " · ".join(parts)
 
     def _cuda(self) -> list[str]:
-        try:
-            free, total = self.torch.cuda.mem_get_info()
-            vram = f"{_gb(total - free)}/{_gb(total)} GB"
-        except Exception:  # noqa: BLE001
-            vram = "—"
-
-        utilization = temperature = "—"
+        utilization = temperature = vram = "—"
         try:
             answer = self.run([
                 "nvidia-smi",
-                "--query-gpu=utilization.gpu,temperature.gpu",
+                "--query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total",
                 "--format=csv,noheader,nounits",
                 "--id=0",
             ], capture_output=True, text=True, timeout=0.8, check=True)
             values = answer.stdout.strip().splitlines()[0].split(",")
             utilization = _percent(values[0].strip())
             temperature = str(round(float(values[1].strip())))
+            used = float(values[2].strip()) * 1024 ** 2
+            total = float(values[3].strip()) * 1024 ** 2
+            vram = f"{_gb(used)}/{_gb(total)} GB"
         except Exception:  # noqa: BLE001
             pass
         return [f"GPU {utilization}", f"VRAM {vram}", f"{temperature}°C"]

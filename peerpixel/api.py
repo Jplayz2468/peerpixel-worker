@@ -17,7 +17,7 @@ class ApiError(Exception):
 
 
 #: Cloudflare blocks urllib's default user agent outright, so identify properly.
-USER_AGENT = "peerpixel-worker/0.8.1 (+https://github.com/Jplayz2468/peerpixel-worker)"
+USER_AGENT = "peerpixel-worker/0.8.2 (+https://github.com/Jplayz2468/peerpixel-worker)"
 
 
 def _call(path: str, *, method="GET", payload=None, raw=None, auth=True, cookie=False, timeout=120):

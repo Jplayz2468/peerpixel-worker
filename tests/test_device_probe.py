@@ -8,6 +8,7 @@ pairing, benchmarking and the dashboard all have to survive being told so.
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 from peerpixel import render
 
@@ -58,10 +59,26 @@ class DeviceProbeTests(unittest.TestCase):
 
     def test_a_healthy_card_is_named_with_its_size(self):
         self.install(FakeCuda(name="NVIDIA GeForce RTX 4080", memory=16_000_000_000))
-        device, _, label, total = render.pick_device()
+        answer = types.SimpleNamespace(stdout="14000, 16384\n")
+        with patch("peerpixel.render.subprocess.run", return_value=answer):
+            device, _, label, total = render.pick_device()
         self.assertEqual(device, "cuda")
-        self.assertEqual(label, "NVIDIA GeForce RTX 4080 (16 GB)")
-        self.assertEqual(total, 16_000_000_000)
+        self.assertEqual(label, "NVIDIA GeForce RTX 4080 (17 GB)")
+        self.assertEqual(total, 16384 * 1024 ** 2)
+
+    def test_device_sizing_never_enters_the_cuda_runtime(self):
+        self.install(FakeCuda(
+            name="NVIDIA GeForce RTX 5080",
+            memory=AssertionError("must not call torch.cuda.mem_get_info"),
+        ))
+        answer = types.SimpleNamespace(stdout="14000, 16303\n")
+
+        with patch("peerpixel.render.subprocess.run", return_value=answer):
+            device, _, label, total = render.pick_device()
+
+        self.assertEqual(device, "cuda")
+        self.assertEqual(label, "NVIDIA GeForce RTX 5080 (17 GB)")
+        self.assertGreater(total, 16e9)
 
     def test_a_card_that_is_out_of_memory_is_still_the_card_this_machine_has(self):
         # The exact failure reported from Linux: torch.AcceleratorError out of

@@ -170,14 +170,28 @@ def pick_device():
 
     if _cuda_present(torch):
         name = _tried(lambda: torch.cuda.get_device_name(0), "NVIDIA GPU")
-        # mem_get_info returns (free, total).
-        total = _tried(lambda: torch.cuda.mem_get_info()[1], 0)
+        _, total = nvidia_memory()
         label = f"{name} ({total / 1e9:.0f} GB)" if total else f"{name} (size unknown)"
         return "cuda", asked or torch.bfloat16, label, total
     if _mps_present(torch):
         total = _tried(lambda: int(subprocess.check_output(["sysctl", "-n", "hw.memsize"])), 0)
         return "mps", asked or torch.bfloat16, f"Apple silicon ({total / 1e9:.0f} GB unified)", total
     return "cpu", asked or torch.float32, "CPU", 0
+
+
+def nvidia_memory() -> tuple[int, int]:
+    """Free and total bytes without creating or entering a CUDA context."""
+    try:
+        answer = subprocess.run([
+            "nvidia-smi",
+            "--query-gpu=memory.free,memory.total",
+            "--format=csv,noheader,nounits",
+            "--id=0",
+        ], capture_output=True, text=True, timeout=2, check=True)
+        free, total = answer.stdout.strip().splitlines()[0].split(",")
+        return int(float(free.strip()) * 1024 ** 2), int(float(total.strip()) * 1024 ** 2)
+    except Exception:  # noqa: BLE001 - an unknown size selects safe offload
+        return 0, 0
 
 
 def _tried(probe, fallback):
@@ -481,7 +495,8 @@ class Renderer:
         # memory it has, something is already using it, and putting the whole
         # model on it is the way to turn that into an out-of-memory crash.
         if device == "cuda":
-            free = _tried(lambda: torch.cuda.mem_get_info()[0], 0)
+            free, current_total = nvidia_memory()
+            total = total or current_total
             mode = self._forced_memory_mode or cuda_memory_mode(total=total, free=free)
             if mode == "sequential":
                 pipe.enable_sequential_cpu_offload()
@@ -568,7 +583,7 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.8.1"
+        runtime = "peerpixel-worker/0.8.2"
         return jpeg, {
             "enhancedPrompt": effective,
             "moderation": moderation,
