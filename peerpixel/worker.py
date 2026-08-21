@@ -320,7 +320,14 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 "on_decode": lambda: bar.begin("decode"),
                 "on_demote": lambda name: bar.note(f"retrying in {name}"),
             }
-            if hasattr(renderer, "generate_job"):
+            if operation == "upscale":
+                from .upscale import Upscaler
+                renderer.unload()
+                if not hasattr(renderer, "_upscaler") or renderer._upscaler is None:
+                    renderer._upscaler = Upscaler()
+                jpeg = renderer._upscaler.upscale(api.upscale_source(job["id"]))
+                evidence = {"manifestVersion": job.get("manifestVersion", "2026-08-21.1")}
+            elif hasattr(renderer, "generate_job"):
                 jpeg, evidence = renderer.generate_job(job, **render_options)
             else:  # small test doubles and third-party renderer integrations
                 jpeg = renderer.render(job, **render_options)
@@ -344,6 +351,11 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 measurements["image"] = base64.b64encode(jpeg).decode()
                 api.submit_verification(job["id"], measurements)
                 link.send(json.dumps({"type": "finished", "jobId": job["id"]}))
+            elif operation == "upscale":
+                link.send(relay.encode({
+                    "type": "upscale_result", "jobId": job["id"], **evidence,
+                }, jpeg))
+                earned = await_settlement(link, job["id"])
             elif job.get("transient"):
                 # A preview has no permanent home. It goes back down this
                 # socket and the dispatcher relays it straight to the browser
