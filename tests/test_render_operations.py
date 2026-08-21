@@ -64,10 +64,10 @@ class OperationTableTests(unittest.TestCase):
     def test_the_two_operations_have_the_sizes_the_network_prices(self):
         self.assertEqual(
             render.operation_of({"operation": "draft"}),
-            {"name": "draft", "width": 128, "height": 128, "steps": 16, "guidance": 5.0})
+            {"name": "draft", "width": 128, "height": 128, "steps": 16, "guidance": 4.0})
         self.assertEqual(
             render.operation_of({"operation": "master"}),
-            {"name": "master", "width": 512, "height": 512, "steps": 50, "guidance": 5.0})
+            {"name": "master", "width": 512, "height": 512, "steps": 50, "guidance": 4.0})
 
     def test_a_check_is_exactly_a_master(self):
         master = dict(render.operation_of({"operation": "master"}), name="check")
@@ -100,7 +100,7 @@ class DraftTests(unittest.TestCase):
         self.assertEqual(call["width"], 128)
         self.assertEqual(call["height"], 128)
         self.assertEqual(call["num_inference_steps"], 16)
-        self.assertEqual(call["guidance_scale"], 5.0,
+        self.assertEqual(call["guidance_scale"], 4.0,
                          "a draft has to preview the master, so it is guided the same way")
         self.assertNotIn("image", call, "a draft has nothing to be conditioned on")
         self.assertEqual(call["generator"].initial_seed(), 7)
@@ -176,13 +176,36 @@ class GuidanceTests(unittest.TestCase):
     def test_every_operation_is_guided(self):
         for operation in ("draft", "master", "verify"):
             with self.subTest(operation=operation):
-                self.assertEqual(render.operation_of({"operation": operation})["guidance"], 5.0)
+                self.assertEqual(render.operation_of({"operation": operation})["guidance"], 4.0)
 
     def test_the_scale_reaches_the_pipeline(self):
         for operation in ("draft", "master"):
             pipe = FakePipeline()
             renderer_with(pipe).render({"prompt": "x", "seed": 1, "operation": operation})
-            self.assertEqual(pipe.calls[0]["guidance_scale"], 5.0)
+            self.assertEqual(pipe.calls[0]["guidance_scale"], 4.0)
+
+    def test_the_server_may_retune_guidance_without_a_worker_release(self):
+        """The reason guidance is read from the payload at all."""
+        pipe = FakePipeline()
+        renderer_with(pipe).render(
+            {"prompt": "x", "seed": 1, "operation": "master", "guidance": 6.5})
+        self.assertEqual(pipe.calls[0]["guidance_scale"], 6.5)
+
+    def test_a_nonsensical_scale_falls_back_rather_than_wasting_a_render(self):
+        # Below 1.0 the pipeline switches guidance off entirely, which is the
+        # distilled behaviour this checkpoint exists to avoid.
+        for asked in (0, 1.0, -3, 999, "high", None, [5]):
+            with self.subTest(asked=asked):
+                spec = render.operation_of(
+                    {"operation": "master", "guidance": asked})
+                self.assertEqual(spec["guidance"], 4.0)
+
+    def test_size_and_steps_are_still_pinned_against_the_payload(self):
+        # These decide what a job costs, so they are not negotiable.
+        spec = render.operation_of({"operation": "master", "steps": 4})
+        self.assertEqual(spec["steps"], 50)
+        with self.assertRaises(ValueError):
+            render.operation_of({"operation": "master", "width": 1024, "height": 1024})
 
     def test_the_checkpoint_is_the_base_one_and_is_pinned(self):
         self.assertIn("base", render.MODEL,

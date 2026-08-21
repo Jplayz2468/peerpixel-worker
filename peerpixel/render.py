@@ -54,7 +54,20 @@ if os.environ.get("PEERPIXEL_MODEL") and not os.environ.get("PEERPIXEL_MODEL_REV
 #: Everything the network sends. The worker refuses anything else rather than
 #: guessing, because guessing wrong means charging for the wrong picture. These
 #: numbers must match public/generation-policy.mjs on the server.
-GUIDANCE = 5.0
+#:
+#: Size and step count are pinned here and a payload that disagrees is refused:
+#: they decide what a job costs, and a job may not talk a machine into rendering
+#: four times the pixels it was priced at. Guidance is different -- it is a
+#: quality knob that does not change the amount of work -- so it is taken from
+#: the payload when one is given, and can be retuned on the server without every
+#: machine on the network needing an update.
+GUIDANCE = 4.0
+
+#: A guidance scale outside this is not a tuning choice, it is a mistake or a
+#: corrupted payload, and it would waste a real render. At or below 1.0 the
+#: pipeline turns guidance off entirely, which is the distilled behaviour this
+#: checkpoint was chosen to get away from.
+GUIDANCE_RANGE = (1.5, 12.0)
 OPERATIONS = {
     "draft": {"width": 128, "height": 128, "steps": 16, "guidance": GUIDANCE},
     "master": {"width": 512, "height": 512, "steps": 50, "guidance": GUIDANCE},
@@ -130,12 +143,13 @@ def describe_accelerator() -> str:
 
 
 def operation_of(job: dict) -> dict:
-    """The size and step count for a job, from its operation and nothing else.
+    """What to render, from the operation and the parts of the payload it trusts.
 
-    A job may not talk the worker into a different resolution than the one it
-    was priced at, so the numbers come from this table rather than from the
-    payload. The payload's width/height are checked against it and a mismatch
-    is refused.
+    A job may not talk the worker into a different resolution or step count than
+    the one it was priced at, so those come from the table above and a payload
+    that disagrees is refused. Guidance is taken from the payload when it is
+    given and sane, because it costs nothing extra and being able to retune it
+    from the server is worth more than pinning it.
     """
     name = job.get("operation", "master")
     spec = OPERATIONS.get(name)
@@ -145,7 +159,18 @@ def operation_of(job: dict) -> dict:
         asked = job.get(axis)
         if asked is not None and int(asked) != spec[axis]:
             raise ValueError(f"{name} is {spec[axis]}px, not {asked}px")
-    return {"name": name, **spec}
+
+    guidance = spec["guidance"]
+    asked = job.get("guidance")
+    if asked is not None:
+        try:
+            asked = float(asked)
+        except (TypeError, ValueError):
+            asked = None
+        low, high = GUIDANCE_RANGE
+        if asked is not None and low <= asked <= high:
+            guidance = asked
+    return {"name": name, **spec, "guidance": guidance}
 
 
 def upscale_reference(image, size):
