@@ -76,9 +76,33 @@ def python_version() -> str:
     return ".".join(str(n) for n in sys.version_info[:3])
 
 
-def running_in_venv() -> bool:
+def torch_here() -> bool:
+    """Can *this* interpreter import the rendering stack?
+
+    The only question that actually matters, and the one worth asking directly
+    rather than inferring from paths.
+    """
+    import importlib.util
+
     try:
-        return Path(sys.executable).resolve() == venv_python().resolve()
+        return importlib.util.find_spec("torch") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def running_in_venv() -> bool:
+    """Is this interpreter running out of the project environment?
+
+    `sys.prefix`, not `sys.executable`. A uv venv's `bin/python` is a symlink
+    to one shared interpreter, so resolving it gives the same path whether you
+    are inside the environment or on the bare interpreter beside it -- and this
+    function answered yes to both. The launcher then never switched, and the
+    first thing to want torch died with ModuleNotFoundError.
+
+    sys.prefix is the environment's own directory and is not shared.
+    """
+    try:
+        return Path(sys.prefix).resolve() == (ROOT / ".venv").resolve()
     except OSError:
         return False
 
@@ -95,8 +119,13 @@ def use_venv() -> None:
 
     Nothing happens if there is no environment yet, or if this is already it.
     """
+    if torch_here():
+        return  # already somewhere that can render
     python = venv_python()
     if not python.exists() or not dependencies_ready() or running_in_venv():
+        # Nowhere better to go. Being already in the environment and still
+        # unable to import torch is a broken install, not a wrong interpreter,
+        # and re-running would loop.
         return
     argv = [str(python), "-m", "peerpixel", *sys.argv[1:]]
     if os.name == "nt":

@@ -12,6 +12,11 @@
 # think has hung.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+
+# A VIRTUAL_ENV inherited from the shell would be used in preference to this
+# folder's own, and PeerPixel would start on an interpreter with none of its
+# libraries. Whatever somebody has activated elsewhere is not this.
+unset VIRTUAL_ENV CONDA_PREFIX
 ROOT="$PWD"
 LOG="$ROOT/.peerpixel-setup.log"
 : > "$LOG"
@@ -108,13 +113,11 @@ if ! "$UV" python find 3.12 >/dev/null 2>&1; then
     || give_up "Could not install Python 3.12."
 fi
 
-if [ "${PEERPIXEL_COMMAND:-}" = "" ]; then
-  printf '\n'
-fi
+printf '\n'
 
 # --no-project on purpose. This interpreter only has to be able to *start*
 # PeerPixel; the rendering libraries go into .venv, installed by PeerPixel
 # itself with a progress bar on it, and it moves onto that interpreter the
 # moment they are there. See runtime.use_venv.
 export PEERPIXEL_UV="$UV"
-exec "$UV" run --no-project --python 3.12 python -m peerpixel ${PEERPIXEL_COMMAND:+"$PEERPIXEL_COMMAND"} "$@"
+exec "$UV" run --no-project --python 3.12 python -m peerpixel "$@"

@@ -64,10 +64,10 @@ class OperationTableTests(unittest.TestCase):
     def test_the_two_operations_have_the_sizes_the_network_prices(self):
         self.assertEqual(
             render.operation_of({"operation": "draft"}),
-            {"name": "draft", "width": 128, "height": 128, "steps": 16, "guidance": 4.0})
+            {"name": "draft", "width": 256, "height": 256, "steps": 6, "guidance": 4.0})
         self.assertEqual(
             render.operation_of({"operation": "master"}),
-            {"name": "master", "width": 512, "height": 512, "steps": 50, "guidance": 4.0})
+            {"name": "master", "width": 1024, "height": 1024, "steps": 50, "guidance": 4.0})
 
     def test_a_check_is_exactly_a_master(self):
         master = dict(render.operation_of({"operation": "master"}), name="check")
@@ -80,83 +80,87 @@ class OperationTableTests(unittest.TestCase):
 
     def test_a_job_cannot_talk_the_worker_into_a_size_it_was_not_priced_at(self):
         with self.assertRaises(ValueError):
-            render.operation_of({"operation": "draft", "width": 512, "height": 512})
+            render.operation_of({"operation": "draft", "width": 1024, "height": 1024})
         with self.assertRaises(ValueError):
-            render.operation_of({"operation": "master", "width": 128, "height": 128})
+            render.operation_of({"operation": "master", "width": 256, "height": 256})
         with self.assertRaises(ValueError):
-            render.operation_of({"operation": "master", "width": 1024, "height": 1024})
+            render.operation_of({"operation": "master", "width": 512, "height": 512})
 
     def test_a_payload_with_no_operation_is_a_master(self):
         self.assertEqual(render.operation_of({})["name"], "master")
 
 
 class DraftTests(unittest.TestCase):
-    def test_a_draft_is_128px_at_four_steps_from_the_prompt_alone(self):
+    def test_a_preview_is_256px_at_six_steps_from_the_prompt_alone(self):
         pipe = FakePipeline()
         jpeg = renderer_with(pipe).render(
             {"prompt": "a quiet harbour", "seed": 7, "operation": "draft"})
 
         (call,) = pipe.calls
-        self.assertEqual(call["width"], 128)
-        self.assertEqual(call["height"], 128)
-        self.assertEqual(call["num_inference_steps"], 16)
+        self.assertEqual(call["width"], 256)
+        self.assertEqual(call["height"], 256)
+        self.assertEqual(call["num_inference_steps"], 6)
         self.assertEqual(call["guidance_scale"], 4.0,
                          "a draft has to preview the master, so it is guided the same way")
         self.assertNotIn("image", call, "a draft has nothing to be conditioned on")
         self.assertEqual(call["generator"].initial_seed(), 7)
         self.assertTrue(jpeg.startswith(b"\xff\xd8\xff"))
 
-    def test_a_draft_reports_every_step_it_runs(self):
+    def test_a_preview_reports_every_step_it_runs(self):
+        # Read from the table rather than written out, because the point of
+        # this test is that nothing is skipped -- not what the number is. The
+        # number is pinned once, above, against the prices on the server.
+        steps = render.OPERATIONS["draft"]["steps"]
         seen = []
         renderer_with(FakePipeline()).render(
             {"prompt": "x", "seed": 1, "operation": "draft"},
             on_step=lambda done, total: seen.append((done, total)))
-        self.assertEqual(seen, [(n, 16) for n in range(1, 17)])
+        self.assertEqual(seen, [(n, steps) for n in range(1, steps + 1)])
 
 
 class MasterTests(unittest.TestCase):
-    def test_a_master_is_512px_at_fifty_guided_steps_conditioned_on_the_draft(self):
+    def test_a_master_is_1024px_at_fifty_guided_steps_conditioned_on_the_preview(self):
         pipe = FakePipeline()
         renderer_with(pipe).render(
             {"prompt": "a quiet harbour", "seed": 7, "operation": "master"},
-            reference=a_jpeg((128, 128)))
+            reference=a_jpeg((256, 256)))
 
         (call,) = pipe.calls
-        self.assertEqual(call["width"], 512)
-        self.assertEqual(call["height"], 512)
+        self.assertEqual(call["width"], 1024)
+        self.assertEqual(call["height"], 1024)
         self.assertEqual(call["num_inference_steps"], 50)
         self.assertEqual(call["generator"].initial_seed(), 7,
-                         "the master keeps the draft's seed")
+                         "the master keeps the preview's seed")
         # Reference conditioning, not img2img: strength would throw away the
         # first part of a four-step schedule and leave one or two real steps.
         self.assertNotIn("strength", call)
         self.assertNotIn("mask_image", call)
 
-    def test_the_chosen_draft_is_upscaled_to_the_output_size_before_conditioning(self):
+    def test_the_chosen_preview_is_upscaled_to_the_output_size_before_conditioning(self):
         pipe = FakePipeline()
         renderer_with(pipe).render(
             {"prompt": "x", "seed": 1, "operation": "master"},
-            reference=a_jpeg((128, 128)))
+            reference=a_jpeg((256, 256)))
         (reference,) = pipe.calls[0]["image"]
-        self.assertEqual(reference.size, (512, 512))
+        self.assertEqual(reference.size, (1024, 1024))
         self.assertEqual(reference.mode, "RGB")
 
     def test_upscaling_uses_lanczos_and_leaves_a_matching_size_alone(self):
         from PIL import Image
-        source = Image.new("RGB", (512, 512), (10, 20, 30))
-        self.assertIs(render.upscale_reference(source, (512, 512)), source)
+        source = Image.new("RGB", (1024, 1024), (10, 20, 30))
+        self.assertIs(render.upscale_reference(source, (1024, 1024)), source)
 
-        small = Image.new("RGB", (128, 128), (255, 0, 0))
-        grown = render.upscale_reference(small, (512, 512))
-        self.assertEqual(grown.size, (512, 512))
-        self.assertEqual(grown.getpixel((256, 256)), (255, 0, 0))
+        small = Image.new("RGB", (256, 256), (255, 0, 0))
+        grown = render.upscale_reference(small, (1024, 1024))
+        self.assertEqual(grown.size, (1024, 1024))
+        self.assertEqual(grown.getpixel((512, 512)), (255, 0, 0))
 
     def test_a_master_with_no_reference_still_renders_at_master_size(self):
         # A probe has no browser behind it, and a browser can lose its copy.
         # Neither is a reason to hand back nothing.
         pipe = FakePipeline()
         renderer_with(pipe).render({"prompt": "x", "seed": 1, "operation": "master"})
-        self.assertEqual(pipe.calls[0]["width"], 512)
+        self.assertEqual(pipe.calls[0]["width"], 1024)
         self.assertNotIn("image", pipe.calls[0])
 
 
@@ -205,7 +209,7 @@ class GuidanceTests(unittest.TestCase):
         spec = render.operation_of({"operation": "master", "steps": 4})
         self.assertEqual(spec["steps"], 50)
         with self.assertRaises(ValueError):
-            render.operation_of({"operation": "master", "width": 1024, "height": 1024})
+            render.operation_of({"operation": "master", "width": 512, "height": 512})
 
     def test_the_checkpoint_is_the_base_one_and_is_pinned(self):
         self.assertIn("base", render.MODEL,

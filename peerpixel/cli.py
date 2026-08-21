@@ -76,6 +76,21 @@ def run_plan(name: str, work, *, estimates: dict | None = None):
 
 # -- the steps ----------------------------------------------------------------
 
+def need_libraries() -> None:
+    """Refuse to go on without the rendering stack, in a sentence.
+
+    Reached only when something has gone wrong that the setup could not fix by
+    itself, so it says what to do rather than dying on `import torch` twelve
+    frames deep.
+    """
+    runtime.use_venv()
+    if runtime.torch_here():
+        return
+    raise RuntimeError(
+        "the rendering libraries are not installed in this folder. "
+        "Run `peerpixel setup` here, or delete .venv and run it again.")
+
+
 def install_libraries() -> None:
     run_plan("install", lambda made: plans.install_dependencies(made))
     step_line(True, "Libraries installed.")
@@ -247,6 +262,7 @@ def cmd_start(argv: list[str]) -> None:
     """Set up if needed, then render until stopped."""
     if not onboard(interactive=sys.stdin.isatty() and "--yes" not in argv):
         raise SystemExit(1)
+    need_libraries()
     from .render import Renderer
     from .worker import run as run_worker
 
@@ -272,10 +288,12 @@ def cmd_download(_argv: list[str]) -> None:
     if weights.cached():
         step_line(True, "The model is already here.")
         return
+    need_libraries()
     fetch_model()
 
 
 def cmd_bench(_argv: list[str]) -> None:
+    need_libraries()
     if not weights.cached():
         fetch_model()
     if not benchmark().get("approved"):

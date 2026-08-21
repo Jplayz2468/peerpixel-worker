@@ -18,13 +18,19 @@ import time
 from . import api, compare, config, console, plans, preview, relay, settings
 from .console import DIM, OFF, clock, say, step_line
 
-#: What this install speaks. Version 1 rendered 512px and posted results over
-#: HTTP; it knew nothing of operations, transient previews or reference images.
-#: Version 2 rendered the step-distilled checkpoint: four steps, no guidance,
-#: 1024px masters. Either would take a job priced for this version and hand
-#: back a different picture at a different size, so the server gives work only
-#: to the current version and an old install sits idle until it is updated.
-PROTOCOL_VERSION = 3
+#: What this install speaks, and it must match `PROTOCOL_VERSION` in the
+#: server's `public/generation-policy.mjs`.
+#:
+#: Version 1 rendered 512px and posted results over HTTP; it knew nothing of
+#: operations, transient previews or reference images. Version 2 rendered the
+#: step-distilled checkpoint: four steps, no guidance. Version 3 was a 128px
+#: preview and a 512px final. Any of them would take a job priced for this
+#: version and hand back a different picture at a different size -- and this
+#: worker pins sizes itself and refuses a payload that disagrees, so an old
+#: install handed a new job fails every one of them. The server therefore gives
+#: work only to the current version, and an old install sits connected, idle
+#: and unpaid until it is updated.
+PROTOCOL_VERSION = 4
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2
@@ -107,25 +113,57 @@ def await_settlement(link, job_id: str, *, timeout: float = 30.0, clock=time.mon
     return 0
 
 
+#: How much a new timing counts against everything before it. Low, because a
+#: job that happened to wait on a cold cache should not convince the next one
+#: that this machine is slow.
+LEARN = 0.35
+
+
+def seconds_per_step(operation: str) -> float:
+    """How long one step of this kind of job takes on this machine.
+
+    Remembered per operation and across runs, because the whole point is that
+    the bar on somebody's *second* render is right from its first frame. A step
+    of a 1024px master and a step of a 256px preview are different amounts of
+    work by a factor of sixteen, so one number for both would be wrong for
+    each.
+
+    A machine that has never rendered this operation falls back to the
+    benchmark, which is the one timed render every worker has already done.
+    """
+    remembered = (config.read().get("secondsPerStep") or {}).get(operation)
+    try:
+        if remembered and float(remembered) > 0:
+            return float(remembered)
+    except (TypeError, ValueError):
+        pass
+    return _bench_per_step()
+
+
+def remember_step(operation: str, seconds: float, steps: int) -> None:
+    if steps <= 0 or seconds <= 0:
+        return
+    measured = seconds / steps
+    known = config.read().get("secondsPerStep") or {}
+    try:
+        before = float(known.get(operation) or 0)
+    except (TypeError, ValueError):
+        before = 0.0
+    known[operation] = measured if before <= 0 else before * (1 - LEARN) + measured * LEARN
+    config.write(secondsPerStep=known)
+
+
 class Session:
     """What this run has done, for the line under the spinner."""
 
-    def __init__(self, per_step: float):
+    def __init__(self):
         self.started = time.monotonic()
         self.idle_since = time.monotonic()
         self.images = 0
         self.pixels = 0.0
-        #: Seconds a step takes on this machine. Seeded from the benchmark and
-        #: re-measured after every render, so the second job's bar is right
-        #: from its first frame instead of after enough steps to work it out.
-        self.per_step = per_step
 
-    def learn(self, seconds: float, steps: int) -> None:
-        if steps > 0 and seconds > 0:
-            measured = seconds / steps
-            # Averaged rather than replaced: one job that waited on a cold
-            # cache should not convince the next one it will be slow too.
-            self.per_step = self.per_step * 0.6 + measured * 0.4 if self.per_step else measured
+    def learn(self, operation: str, seconds: float, steps: int) -> None:
+        remember_step(operation, seconds, steps)
 
     def idle(self) -> None:
         self.idle_since = time.monotonic()
@@ -136,12 +174,8 @@ class Session:
         return f"  {DIM}·{OFF}  ".join(parts)
 
 
-def _per_step_seed() -> float:
-    """A first guess at seconds per step, from the benchmark that already ran.
-
-    The benchmark is four steps at master resolution, timed. That is exactly
-    the number a master's bar wants, and it is already on disk.
-    """
+def _bench_per_step() -> float:
+    """A first guess, from the one timed render every worker has already done."""
     from .render import OPERATIONS
 
     ms = config.read().get("benchMs")
@@ -162,7 +196,7 @@ def run(renderer, once: bool = False) -> int:
     except ImportError:
         raise SystemExit("missing dependency: run `peerpixel setup`") from None
 
-    session = Session(_per_step_seed())
+    session = Session()
     state = ["connecting"]
     prompt = [""]
 
@@ -274,7 +308,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
     sent_at[0] = 0.0
     prompt[0] = job["prompt"]
 
-    bar = plans.tracker("job", {"job.render": session.per_step * steps})
+    bar = plans.tracker("job", {"job.render": seconds_per_step(operation) * steps})
     started = time.monotonic()
     earned = 0.0
 
@@ -315,9 +349,13 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                             "the browser never sent the preview to render from")
 
             bar.begin("render", detail=job["prompt"][:80])
+            # Timed from here rather than from the top of the job: waiting for
+            # somebody's browser to send a preview back is not this machine
+            # rendering, and folding it in would make every later bar too slow.
+            render_started = time.monotonic()
             jpeg = renderer.render(job, on_step=stepped, reference=reference,
                                    on_demote=lambda name: bar.note(f"retrying in {name}"))
-            session.learn(time.monotonic() - started, steps)
+            session.learn(operation, time.monotonic() - render_started, steps)
             bar.begin("deliver")
             if settings.keep_last():
                 try:

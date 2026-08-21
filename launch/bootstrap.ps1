@@ -8,6 +8,12 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+
+# A VIRTUAL_ENV inherited from the shell would be used in preference to this
+# folder's own, and PeerPixel would start on an interpreter with none of its
+# libraries. Whatever somebody has activated elsewhere is not this.
+Remove-Item Env:VIRTUAL_ENV -ErrorAction SilentlyContinue
+Remove-Item Env:CONDA_PREFIX -ErrorAction SilentlyContinue
 $log = Join-Path $root ".peerpixel-setup.log"
 Set-Content -Path $log -Value "" -Encoding utf8
 
@@ -98,8 +104,4 @@ if ($LASTEXITCODE -ne 0) {
 # itself with a progress bar on it, and it moves onto that interpreter the
 # moment they are there. See runtime.use_venv.
 $env:PEERPIXEL_UV = $uv
-if ($env:PEERPIXEL_COMMAND) {
-  & $uv run --no-project --python 3.12 python -m peerpixel $env:PEERPIXEL_COMMAND @args
-} else {
-  & $uv run --no-project --python 3.12 python -m peerpixel @args
-}
+& $uv run --no-project --python 3.12 python -m peerpixel @args

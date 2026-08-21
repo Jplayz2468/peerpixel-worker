@@ -45,12 +45,41 @@ def ticking(values):
     return clock
 
 
+#: What each protocol version means, in the only terms the server and this
+#: worker have to agree on. Both ends pin sizes and steps, and both refuse a
+#: payload that disagrees -- so a size change without a version bump means the
+#: dispatcher confidently hands every job to a machine certain to fail it.
+SIZES_BY_VERSION = {
+    3: {"draft": (128, 16), "master": (512, 50)},
+    4: {"draft": (256, 6), "master": (1024, 50)},
+}
+
+
 class ProtocolVersionTests(unittest.TestCase):
-    def test_this_install_advertises_version_three(self):
-        # Bumped whenever what a job means changes. Version 2 rendered four
-        # distilled steps at 1024; handed a job priced for this version it would
-        # return a different picture at a different size.
-        self.assertEqual(worker.PROTOCOL_VERSION, 3)
+    def test_the_advertised_version_matches_the_sizes_this_install_pins(self):
+        """The bump and the sizes have to move together, or neither is safe.
+
+        This is the test that fails when somebody edits OPERATIONS and forgets
+        the version. Getting that wrong is not a degraded network -- it is one
+        where every job is dispatched to a worker that refuses it.
+        """
+        from peerpixel.render import OPERATIONS
+
+        expected = SIZES_BY_VERSION.get(worker.PROTOCOL_VERSION)
+        self.assertIsNotNone(
+            expected,
+            f"protocol {worker.PROTOCOL_VERSION} is not described in SIZES_BY_VERSION; "
+            "add what it means, and change it on the server too")
+        for name, (size, steps) in expected.items():
+            self.assertEqual((OPERATIONS[name]["width"], OPERATIONS[name]["height"]),
+                             (size, size), f"{name} size")
+            self.assertEqual(OPERATIONS[name]["steps"], steps, f"{name} steps")
+
+    def test_no_two_versions_describe_the_same_job(self):
+        # A bump that changed nothing would strand every older install for no
+        # reason at all.
+        shapes = [tuple(sorted(v.items())) for v in SIZES_BY_VERSION.values()]
+        self.assertEqual(len(shapes), len(set(shapes)))
 
     def test_the_model_is_kept_loaded_for_two_idle_hours(self):
         self.assertFalse(worker.should_unload_model(100, 100 + 7199, loaded=True))

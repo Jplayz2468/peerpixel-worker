@@ -16,14 +16,15 @@ Guidance costs double on top of the step count: a guided step runs the
 transformer twice, once for the prompt and once for an empty one, and mixes
 them. Fifty steps is a hundred forward passes.
 
-A **draft** is 128x128 from the prompt alone. It exists to answer whether the
-composition is the one somebody wanted. Sixteen steps rather than four, because
-a draft that is not a fair preview of the master is worse than no draft at all.
-It goes straight back down the socket rather than being uploaded anywhere.
+A **preview** is 256x256 from the prompt alone, in six steps. It exists to
+answer whether the composition is the one somebody wanted, and it is asked
+several times before anything is chosen, so being cheap is most of its job. It
+goes straight back down the socket rather than being uploaded anywhere.
 
-A **master** is 512x512 conditioned on the draft that was chosen. The draft
-arrives over the socket, is upscaled to the output size with Lanczos, and is
-handed to Klein as a reference image. It is deliberately not img2img: an
+A **master** is 1024x1024 -- the size this checkpoint was trained at --
+conditioned on the preview that was chosen. The preview arrives over the
+socket, is upscaled to the output size with Lanczos, and is handed to Klein as
+a reference image. It is deliberately not img2img: an
 img2img `strength` throws away the first part of the schedule, so a conditioned
 render would silently run fewer steps than it was paid for. Reference-image
 conditioning keeps the whole schedule and still keeps the framing, palette and
@@ -71,12 +72,21 @@ GUIDANCE = 4.0
 #: checkpoint was chosen to get away from.
 GUIDANCE_RANGE = (1.5, 12.0)
 OPERATIONS = {
-    "draft": {"width": 128, "height": 128, "steps": 16, "guidance": GUIDANCE},
-    "master": {"width": 512, "height": 512, "steps": 50, "guidance": GUIDANCE},
+    # A preview exists to answer one question -- is this the composition I
+    # wanted -- and it is asked several times before anything is chosen, so
+    # what matters about it is that it is cheap. 256px at six steps is a
+    # quarter the work of the 128px sixteen-step draft it replaces and comes
+    # back at twice the size: the step count was the expensive part, not the
+    # pixels, and six is enough for this checkpoint to settle a composition.
+    "draft": {"width": 256, "height": 256, "steps": 6, "guidance": GUIDANCE},
+    # And the master is rendered at the size the checkpoint was trained for.
+    # 512 was half of it in each direction and it showed -- FLUX.2 at 1024 puts
+    # detail where it belongs rather than smoothing it away.
+    "master": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
     # A check is a master rendered a second time on a machine the operator
     # owns, so it is the same work with the same inputs. Only what happens to
     # the result differs: it is compared rather than delivered.
-    "verify": {"width": 512, "height": 512, "steps": 50, "guidance": GUIDANCE},
+    "verify": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
     # The admission test, and the only operation the network never sends. It is
     # master resolution -- that is what catches a card which cannot hold a real
     # render -- at a step count chosen to be timed rather than looked at.
@@ -87,7 +97,7 @@ OPERATIONS = {
     # the benchmark too, so a test written to run four steps ran fifty, took
     # twelve times as long as it was meant to, and was then judged against a
     # limit written for four.
-    "bench": {"width": 512, "height": 512, "steps": 4, "guidance": GUIDANCE},
+    "bench": {"width": 1024, "height": 1024, "steps": 4, "guidance": GUIDANCE},
 }
 
 #: What may arrive over the wire. `bench` is local, and a job claiming to be one
@@ -180,6 +190,38 @@ def describe_accelerator() -> str:
         return pick_device()[2]
     except Exception:  # noqa: BLE001 - torch itself may be missing or broken
         return "unknown"
+
+
+def _quieten() -> None:
+    """Stop the libraries drawing over the bar.
+
+    diffusers, transformers and the Hub each keep their own tqdm and their own
+    logger, and all three print while a model loads -- straight through the
+    lines this program is repainting, which tears the drawing apart and leaves
+    fragments of somebody else's percentage on the screen. None of it is
+    information the person watching asked for; the bar already says what is
+    happening. Every call is guarded because a missing one of these is not a
+    reason to fail to render.
+    """
+    import logging
+    import os
+    import warnings
+
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    warnings.filterwarnings("ignore", category=FutureWarning, module="diffusers")
+    for call in (
+        lambda: __import__("diffusers").utils.logging.disable_progress_bar(),
+        lambda: __import__("diffusers").utils.logging.set_verbosity_error(),
+        lambda: __import__("transformers").utils.logging.disable_progress_bar(),
+        lambda: __import__("transformers").utils.logging.set_verbosity_error(),
+        lambda: __import__("huggingface_hub").utils.logging.set_verbosity_error(),
+    ):
+        try:
+            call()
+        except Exception:  # noqa: BLE001 - a quieter log is never worth a crash
+            pass
+    logging.getLogger("diffusers").setLevel(logging.ERROR)
 
 
 def operation_of(job: dict) -> dict:
@@ -311,9 +353,11 @@ class Renderer:
 
         device, dtype, label, total = pick_device()
         self._device, self._dtype, self.accelerator = device, dtype, label
-        print(f"loading {MODEL} on {label}...", flush=True)
+        _quieten()
         started = time.time()
-        pipe = Flux2KleinPipeline.from_pretrained(MODEL, revision=REVISION, torch_dtype=dtype)
+        # `dtype`, not `torch_dtype`: the old spelling is deprecated and prints
+        # a warning across whatever is being drawn at the time.
+        pipe = Flux2KleinPipeline.from_pretrained(MODEL, revision=REVISION, dtype=dtype)
 
         # Under roughly 24 GB the transformer and the text encoder cannot both
         # sit on the accelerator. Handing them over a layer at a time is slower
@@ -328,7 +372,7 @@ class Renderer:
             pipe.to(device)
         pipe.set_progress_bar_config(disable=True)
         self.pipe = pipe
-        print(f"ready in {time.time() - started:.0f}s", flush=True)
+        self.load_seconds = time.time() - started
 
     def demote(self) -> str | None:
         """Give up on this precision and take the next one down. Returns its name.

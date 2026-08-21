@@ -95,7 +95,7 @@ def ensure(on_phase=None, on_progress=None) -> str:
     from huggingface_hub import snapshot_download
     from huggingface_hub.utils import disable_progress_bars
 
-    disable_progress_bars()  # its per-file bars would fight with our one line
+    disable_progress_bars()  # its per-file bars would fight with the one bar
 
     phase("plan")
     try:

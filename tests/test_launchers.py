@@ -142,18 +142,23 @@ class BarTests(unittest.TestCase):
         self.assertRegex(source, r"Write-Progress")
 
 
-class OldNamesTests(unittest.TestCase):
-    """setup.sh and update.sh are in a README somewhere and in muscle memory."""
+class EnvironmentTests(unittest.TestCase):
+    def test_a_foreign_virtualenv_is_dropped_before_starting(self):
+        """Otherwise it wins over this folder's own and nothing can render.
 
-    def test_they_still_work_and_only_delegate(self):
-        for name in ("setup.sh", "update.sh"):
+        An activated environment in somebody's shell is inherited by the
+        launcher, and uv will use it in preference to `.venv` here -- so
+        PeerPixel starts on an interpreter with none of its libraries and the
+        first thing to want torch dies.
+        """
+        self.assertIn("unset VIRTUAL_ENV", read(SHELL))
+        self.assertIn("Remove-Item Env:VIRTUAL_ENV", read(POWERSHELL))
+
+    def test_the_old_shell_scripts_are_gone(self):
+        # Setting up is what the launcher does, and updating is a command.
+        for name in ("setup.sh", "setup.ps1", "update.sh", "update.ps1"):
             with self.subTest(script=name):
-                source = read(name)
-                self.assertIn("launch/bootstrap.sh", source)
-                self.assertTrue((ROOT / name).stat().st_mode & 0o111)
-
-    def test_update_asks_for_the_update_rather_than_the_window(self):
-        self.assertRegex(read("update.sh"), r"PEERPIXEL_COMMAND=update")
+                self.assertFalse((ROOT / name).exists(), f"{name} is back")
 
 
 if __name__ == "__main__":
