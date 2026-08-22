@@ -562,7 +562,8 @@ class Renderer:
         started = time.time()
         from .precision import pipeline_quantization_config, runtime_probe, select_precision
 
-        plan = select_precision(runtime_probe(total=total, free=free)) if device == "cuda" else None
+        requested_precision = os.environ.get("PEERPIXEL_DTYPE") or config.read().get("dtype")
+        plan = select_precision(runtime_probe(total=total, free=free), requested_precision) if device == "cuda" else None
         self._precision_mode = plan.mode if plan is not None else str(dtype).split(".")[-1]
         self._adapters_enabled = plan.adapters if plan is not None else True
 

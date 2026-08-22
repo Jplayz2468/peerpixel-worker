@@ -1,6 +1,9 @@
 import unittest
 
-from peerpixel.benchmark import BENCH_STEPS, JOB, estimated_master_ms, likely_generation_work, run_benchmark
+from peerpixel.benchmark import (
+    BENCH_STEPS, JOB, estimated_master_ms, likely_generation_work,
+    qualify_candidate, run_benchmark,
+)
 from peerpixel.render import NETWORK_OPERATIONS, OPERATIONS
 
 
@@ -24,6 +27,22 @@ class FakeRenderer:
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_fast_path_requires_two_times_speed_and_valid_quality(self):
+        too_slow = qualify_candidate(100_000, 51_000, valid=True, quality_passed=True)
+        self.assertFalse(too_slow["qualified"])
+        self.assertAlmostEqual(too_slow["speedup"], 1.96, places=2)
+        bad_quality = qualify_candidate(100_000, 40_000, valid=True, quality_passed=False)
+        self.assertFalse(bad_quality["qualified"])
+        accepted = qualify_candidate(100_000, 40_000, valid=True, quality_passed=True)
+        self.assertTrue(accepted["qualified"])
+        self.assertEqual(accepted["speedup"], 2.5)
+
+    def test_oom_nan_bad_dimensions_or_missing_moderation_never_qualifies(self):
+        for validity in (False, None):
+            with self.subTest(validity=validity):
+                self.assertFalse(qualify_candidate(
+                    100_000, 20_000, valid=validity, quality_passed=True,
+                )["qualified"])
     def test_short_sample_predicts_full_master_and_warns_without_rejecting(self):
         self.assertEqual(estimated_master_ms(4_000), 50_000)
         self.assertTrue(likely_generation_work(4_000))

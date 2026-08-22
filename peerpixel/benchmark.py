@@ -36,6 +36,21 @@ def likely_generation_work(bench_ms: int) -> bool:
     return estimated_master_ms(bench_ms) <= GENERATION_TARGET_MS
 
 
+def qualify_candidate(baseline_ms: int, candidate_ms: int, *, valid,
+                      quality_passed: bool) -> dict:
+    """Apply the release gate to one matching warm render."""
+    try:
+        speedup = float(baseline_ms) / float(candidate_ms)
+    except (TypeError, ValueError, ZeroDivisionError):
+        speedup = 0.0
+    speedup = round(max(0.0, speedup), 3)
+    return {
+        "speedup": speedup,
+        "qualified": bool(valid is True and quality_passed and speedup >= 2.0),
+        "targetSpeedup": 10.0,
+    }
+
+
 def run_benchmark(renderer, *, submit=api.submit_bench, clock=time.time,
                   on_step=None, between=None):
     """Warm kernels once, then time an identical steady-state render.
