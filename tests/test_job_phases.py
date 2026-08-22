@@ -1,6 +1,6 @@
 import unittest
 
-from peerpixel.job_phases import PhaseReporter, remember_phase, valid_phase_sequence
+from peerpixel.job_phases import EXPORT_PHASES, PhaseReporter, remember_phase, valid_phase_sequence
 
 
 class PhaseReporterTests(unittest.TestCase):
@@ -11,6 +11,12 @@ class PhaseReporterTests(unittest.TestCase):
             "delivering", "complete",
         ]))
         self.assertFalse(valid_phase_sequence(["rendering", "encoding_prompt"]))
+
+    def test_export_has_its_own_monotonic_phase_order(self):
+        self.assertTrue(valid_phase_sequence([
+            "preparing", "loading_upscaler", "upscaling", "encoding_export",
+            "delivering", "complete",
+        ], allowed=EXPORT_PHASES))
 
     def test_phase_history_uses_a_bounded_ema(self):
         self.assertEqual(remember_phase(1000, 3000, alpha=0.25), 1500)

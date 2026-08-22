@@ -299,7 +299,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
     bar = plans.tracker("job", {"job.render": seconds_per_step(operation) * steps})
     started = time.monotonic()
     earned = 0.0
-    from .job_phases import PhaseReporter
+    from .job_phases import EXPORT_PHASES, PHASES, PhaseReporter
 
     reporter = PhaseReporter(
         job["id"], lambda event: link.send(json.dumps({
@@ -309,6 +309,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
         })),
         scope=f"{operation}:{job.get('width', 0)}:{getattr(renderer, '_precision_mode', 'native')}:{getattr(renderer, '_memory_mode', 'unknown')}",
         persist=True,
+        phases=EXPORT_PHASES if operation == "upscale" else PHASES,
     )
     reporter.begin("preparing")
 
@@ -375,11 +376,21 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 jpeg, evidence = b"", {}
             elif operation == "upscale":
                 from .upscale import Upscaler
+                reporter.begin("loading_upscaler")
                 renderer.unload()
                 if not hasattr(renderer, "_upscaler") or renderer._upscaler is None:
                     renderer._upscaler = Upscaler()
                 source = api.upscale_source(job["id"])
-                jpeg = renderer._upscaler.upscale(source)
+                def upscale_progress(done, total):
+                    try:
+                        link.send(json.dumps({
+                            "type": "upscale_progress", "jobId": job["id"],
+                            "done": done, "total": total,
+                        }))
+                    except Exception:
+                        pass
+                jpeg = renderer._upscaler.upscale(
+                    source, on_phase=reporter.begin, on_progress=upscale_progress)
                 evidence = {"manifestVersion": job.get("manifestVersion", "2026-08-21.1"),
                             "attestations": [{"operation": "upscale",
                                 "inputDigest": hashlib.sha256(source).hexdigest(),

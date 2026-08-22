@@ -29,10 +29,18 @@ class Upscaler:
         checkpoint = load_file(path / "model.safetensors", device="cpu")
         self.model.upsampler.load_state_dict(checkpoint, strict=True)
 
-    def upscale(self, jpeg: bytes) -> bytes:
+    def upscale(self, jpeg: bytes, on_phase=None, on_progress=None) -> bytes:
         self.warm()
         source = Image.open(io.BytesIO(jpeg)).convert("RGB")
+        if on_phase is not None:
+            on_phase("upscaling")
+        if on_progress is not None:
+            on_progress(0, 1)
         image = self.model.upscale_4x_overlapped(source)
+        if on_progress is not None:
+            on_progress(1, 1)
+        if on_phase is not None:
+            on_phase("encoding_export")
         output = io.BytesIO()
         image.save(output, "JPEG", quality=95, optimize=True)
         return output.getvalue()

@@ -11,12 +11,16 @@ PHASES = (
     "loading_style", "rendering", "decoding", "safety_check",
     "delivering", "complete",
 )
-_INDEX = {name: index for index, name in enumerate(PHASES)}
+EXPORT_PHASES = (
+    "preparing", "loading_upscaler", "upscaling", "encoding_export",
+    "delivering", "complete",
+)
 
 
-def valid_phase_sequence(phases) -> bool:
+def valid_phase_sequence(phases, *, allowed=PHASES) -> bool:
+    index = {name: position for position, name in enumerate(allowed)}
     try:
-        indexes = [_INDEX[name] for name in phases]
+        indexes = [index[name] for name in phases]
     except (KeyError, TypeError):
         return False
     return all(after > before for before, after in zip(indexes, indexes[1:]))
@@ -37,23 +41,25 @@ def remember_phase(before, measured, *, alpha: float = 0.25):
 
 class PhaseReporter:
     def __init__(self, job_id: str, emit, *, scope: str = "generation",
-                 clock=time.monotonic, wall=time.time, persist: bool = False):
+                 clock=time.monotonic, wall=time.time, persist: bool = False,
+                 phases=PHASES):
         self.job_id = job_id
         self.emit = emit
         self.scope = scope
         self.clock = clock
         self.wall = wall
         self.persist_enabled = persist
+        self.index = {name: position for position, name in enumerate(phases)}
         self.started = clock()
         self.current = None
         self.current_started = self.started
         self.estimates = dict((config.read().get("phaseTimings") or {}).get(scope) or {})
 
     def begin(self, phase: str, detail: str | None = None) -> bool:
-        index = _INDEX.get(phase)
+        index = self.index.get(phase)
         if index is None:
             return False
-        if self.current is not None and index <= _INDEX[self.current]:
+        if self.current is not None and index <= self.index[self.current]:
             return False
         now = self.clock()
         if self.current is not None:
