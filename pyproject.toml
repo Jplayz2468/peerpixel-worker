@@ -16,6 +16,7 @@ dependencies = [
   "websockets>=13",
   "zstandard>=0.23",
   "aura-sr>=0.0.4",
+  "bitsandbytes>=0.45; platform_system != 'Darwin'",
 ]
 
 [project.scripts]

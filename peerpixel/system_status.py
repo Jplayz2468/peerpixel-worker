@@ -63,6 +63,9 @@ class SystemStatus:
             parts.append(self._mps())
 
         mode = getattr(self.renderer, "_memory_mode", None)
+        precision = getattr(self.renderer, "_precision_mode", None)
+        if precision:
+            parts.append(str(precision))
         if mode:
             parts.append(str(mode))
         return " · ".join(parts)

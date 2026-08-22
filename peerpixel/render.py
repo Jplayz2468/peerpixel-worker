@@ -540,6 +540,9 @@ class Renderer:
         self._device, self._dtype, self.accelerator, self._total = pick_device()
         self._memory_mode = None
         self._forced_memory_mode = None
+        self._precision_mode = "native"
+        self._adapters_enabled = True
+        self._style_mode = "prompt_only"
 
     def warm(self):
         """Load once and keep it. A 4B model takes tens of seconds to load."""
@@ -557,9 +560,36 @@ class Renderer:
             require_cuda_headroom(free, total)
         _quieten()
         started = time.time()
+        from .precision import pipeline_quantization_config, runtime_probe, select_precision
+
+        plan = select_precision(runtime_probe(total=total, free=free)) if device == "cuda" else None
+        self._precision_mode = plan.mode if plan is not None else str(dtype).split(".")[-1]
+        self._adapters_enabled = plan.adapters if plan is not None else True
+
         # `dtype`, not `torch_dtype`: the old spelling is deprecated and prints
         # a warning across whatever is being drawn at the time.
-        pipe = Flux2KleinPipeline.from_pretrained(MODEL, revision=REVISION, dtype=dtype)
+        load_options = {"revision": REVISION, "dtype": dtype}
+        if plan is not None and plan.mode in {"int8", "int4"}:
+            load_options.update(
+                quantization_config=pipeline_quantization_config(plan.mode),
+                device_map="cuda",
+            )
+        try:
+            pipe = Flux2KleinPipeline.from_pretrained(MODEL, **load_options)
+        except Exception:
+            if plan is None or plan.mode not in {"int8", "int4"}:
+                raise
+            # Backend or driver incompatibility must degrade to the proven path,
+            # not make the worker unusable.
+            import gc
+            gc.collect()
+            _tried(torch.cuda.empty_cache, None)
+            plan = select_precision(runtime_probe(total=total, free=free),
+                                    requested="bfloat16")
+            self._precision_mode = "bfloat16"
+            self._adapters_enabled = True
+            pipe = Flux2KleinPipeline.from_pretrained(
+                MODEL, revision=REVISION, dtype=torch.bfloat16)
 
         # Under roughly 24 GB the transformer and the text encoder cannot both
         # sit on the accelerator. Handing them over a layer at a time is slower
@@ -569,7 +599,9 @@ class Renderer:
         # memory it has, something is already using it, and putting the whole
         # model on it is the way to turn that into an out-of-memory crash.
         if device == "cuda":
-            mode = self._forced_memory_mode or cuda_memory_mode(total=total, free=free)
+            mode = self._forced_memory_mode or (
+                "resident" if plan is not None and plan.resident
+                else cuda_memory_mode(total=total, free=free))
             if mode == "sequential":
                 pipe.enable_sequential_cpu_offload()
             elif mode == "group":
@@ -583,7 +615,7 @@ class Renderer:
                     offload_type="block_level",
                     **group_options,
                 )
-            else:
+            elif plan is None or plan.mode not in {"int8", "int4"}:
                 pipe.to(device)
             self._memory_mode = mode
         else:
@@ -621,24 +653,31 @@ class Renderer:
             raise ValueError("wrong_style_recipe")
         if job.get("manifestVersion", MANIFEST_VERSION) != MANIFEST_VERSION:
             raise ValueError("wrong_model_manifest")
-        for name, _weight in adapters:
-            if name in self._loaded_adapters:
-                continue
-            path = model_cache.ensure(name)
-            if lora_uses_raw_peft_keys(path):
-                self.pipe.transformer.load_lora_adapter(
-                    str(path.parent), weight_name=path.name,
-                    adapter_name=name, prefix=None,
-                )
-            else:
-                self.pipe.load_lora_weights(
-                    str(path.parent), weight_name=path.name, adapter_name=name,
-                )
-            self._loaded_adapters.add(name)
-        self.pipe.set_adapters(
-            [name for name, _weight in adapters],
-            adapter_weights=[weight for _name, weight in adapters],
-        )
+        if not self._adapters_enabled:
+            return "prompt_only"
+        try:
+            for name, _weight in adapters:
+                if name in self._loaded_adapters:
+                    continue
+                path = model_cache.ensure(name)
+                if lora_uses_raw_peft_keys(path):
+                    self.pipe.transformer.load_lora_adapter(
+                        str(path.parent), weight_name=path.name,
+                        adapter_name=name, prefix=None,
+                    )
+                else:
+                    self.pipe.load_lora_weights(
+                        str(path.parent), weight_name=path.name, adapter_name=name,
+                    )
+                self._loaded_adapters.add(name)
+            self.pipe.set_adapters(
+                [name for name, _weight in adapters],
+                adapter_weights=[weight for _name, weight in adapters],
+            )
+            return "adapters"
+        except Exception:  # noqa: BLE001 - style adapters are explicitly optional
+            _tried(getattr(self.pipe, "disable_lora", lambda: None), None)
+            return "prompt_only"
 
     def generate_job(self, job: dict, **render_options):
         """Polish, style, render, then classify locally in that exact order."""
@@ -666,6 +705,9 @@ class Renderer:
             "moderation": moderation,
             "manifestVersion": job.get("manifestVersion", MANIFEST_VERSION),
             "recipeId": STYLE_RECIPES[job.get("style", "photoreal")][0],
+            "precision": getattr(self, "_precision_mode", "native"),
+            "memoryMode": getattr(self, "_memory_mode", "resident"),
+            "styleMode": getattr(self, "_style_mode", "prompt_only"),
             "attestations": [
                 {"operation": "prompt", "inputDigest": _digest({
                     "prompt": job["prompt"], "style": job.get("style", "photoreal"),
@@ -762,7 +804,7 @@ class Renderer:
         self.warm()
         spec = operation_of(job)
         if spec["name"] != "bench" and ("style" in job or "recipeId" in job):
-            self.apply_style(job)
+            self._style_mode = self.apply_style(job)
         width, height, steps = spec["width"], spec["height"], spec["steps"]
 
         # The seed is the whole of the relationship between a preview and its

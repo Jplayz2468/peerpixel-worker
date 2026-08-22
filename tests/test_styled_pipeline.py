@@ -79,6 +79,7 @@ class StyledPipelineTests(unittest.TestCase):
                 self.active = (names, adapter_weights)
         renderer = object.__new__(Renderer)
         renderer.pipe, renderer._loaded_adapters = Pipe(), set()
+        renderer._adapters_enabled = True
         with mock.patch("peerpixel.model_cache.ensure", side_effect=lambda name: __import__("pathlib").Path(f"/cache/{name}.safetensors")):
             renderer.apply_style({"style": "anime", "recipeId": "anime-v1",
                                   "manifestVersion": "2026-08-21.1"})
@@ -91,3 +92,40 @@ class StyledPipelineTests(unittest.TestCase):
             renderer.apply_style({"style": "vector", "recipeId": "vector-v1",
                                   "manifestVersion": "2026-08-21.1"})
             self.assertEqual(renderer.pipe.active, (["simplefinevector"], [1.0]))
+
+    def test_prompt_only_style_never_loads_or_activates_adapters(self):
+        renderer = object.__new__(Renderer)
+        renderer.pipe = mock.Mock()
+        renderer._loaded_adapters = set()
+        renderer._adapters_enabled = False
+        with mock.patch("peerpixel.model_cache.ensure") as ensure:
+            mode = renderer.apply_style({
+                "style": "anime", "recipeId": "anime-v1",
+                "manifestVersion": "2026-08-21.1",
+            })
+        self.assertEqual(mode, "prompt_only")
+        ensure.assert_not_called()
+        renderer.pipe.set_adapters.assert_not_called()
+
+    def test_generation_evidence_reports_precision_memory_and_style_mode(self):
+        class Enhancer:
+            def enhance(self, *_args, **_kwargs): return "polished"
+            def unload(self): pass
+        class Safety:
+            def classify(self, _jpeg): return {"label": "normal", "nsfwScore": 0.0}
+
+        renderer = object.__new__(Renderer)
+        renderer._enhancer, renderer._safety = Enhancer(), Safety()
+        renderer._precision_mode = "int8"
+        renderer._memory_mode = "resident"
+        renderer._style_mode = "prompt_only"
+        renderer.render = lambda *_args, **_kwargs: b"jpeg"
+        _, evidence = renderer.generate_job({
+            "prompt": "fox", "style": "anime", "operation": "draft", "seed": 7,
+            "recipeId": "anime-v1", "manifestVersion": "2026-08-21.1",
+        })
+        self.assertEqual({key: evidence[key] for key in
+                          ("precision", "memoryMode", "styleMode")}, {
+            "precision": "int8", "memoryMode": "resident",
+            "styleMode": "prompt_only",
+        })
