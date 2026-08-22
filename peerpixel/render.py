@@ -122,6 +122,15 @@ STYLE_RECIPES = {
 }
 
 
+def lora_uses_raw_peft_keys(path) -> bool:
+    """Recognize trainer-native transformer keys that lack Diffusers' prefix."""
+    from safetensors import safe_open
+
+    with safe_open(str(path), framework="pt", device="cpu") as weights:
+        first = next(iter(weights.keys()), "")
+    return first.startswith(("single_transformer_blocks.", "transformer_blocks."))
+
+
 def _digest(value) -> str:
     if isinstance(value, bytes):
         payload = value
@@ -311,6 +320,9 @@ def cuda_group_options(*, total: int, free: int) -> dict:
         "use_stream": False,
         "record_stream": False,
         "exclude_modules": ["vae"],
+        # Four adjacent blocks amortize PCIe transfers on 16 GB cards. Smaller
+        # cards retain the proven one-block path and its lower peak.
+        "num_blocks_per_group": 4 if total >= 15e9 and free >= 13e9 else 1,
     }
 
 
@@ -573,7 +585,6 @@ class Renderer:
                     onload_device=torch.device("cuda"),
                     offload_device=torch.device("cpu"),
                     offload_type="block_level",
-                    num_blocks_per_group=1,
                     **group_options,
                 )
             else:
@@ -618,9 +629,15 @@ class Renderer:
             if name in self._loaded_adapters:
                 continue
             path = model_cache.ensure(name)
-            self.pipe.load_lora_weights(
-                str(path.parent), weight_name=path.name, adapter_name=name,
-            )
+            if lora_uses_raw_peft_keys(path):
+                self.pipe.transformer.load_lora_adapter(
+                    str(path.parent), weight_name=path.name,
+                    adapter_name=name, prefix=None,
+                )
+            else:
+                self.pipe.load_lora_weights(
+                    str(path.parent), weight_name=path.name, adapter_name=name,
+                )
             self._loaded_adapters.add(name)
         self.pipe.set_adapters(
             [name for name, _weight in adapters],
@@ -647,7 +664,7 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.8.4"
+        runtime = "peerpixel-worker/0.8.5"
         return jpeg, {
             "enhancedPrompt": effective,
             "moderation": moderation,

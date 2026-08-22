@@ -66,9 +66,13 @@ class StyledPipelineTests(unittest.TestCase):
     def test_safety_threshold_is_strictly_greater_than_point_65(self):
         self.assertEqual(THRESHOLD, 0.65)
 
-    def test_exact_lora_stacks_are_activated_per_style(self):
+    @mock.patch("peerpixel.render.lora_uses_raw_peft_keys",
+                side_effect=lambda path: "flux-klein-art" in str(path))
+    def test_exact_lora_stacks_are_activated_per_style(self, _raw_format):
         class Pipe:
-            def __init__(self): self.loaded, self.active = [], None
+            def __init__(self):
+                self.loaded, self.active = [], None
+                self.transformer = mock.Mock()
             def load_lora_weights(self, folder, *, weight_name, adapter_name):
                 self.loaded.append(adapter_name)
             def set_adapters(self, names, *, adapter_weights):
@@ -80,6 +84,10 @@ class StyledPipelineTests(unittest.TestCase):
                                   "manifestVersion": "2026-08-21.1"})
             self.assertEqual(renderer.pipe.active,
                              (["rebelmidjourney", "flux-klein-art"], [0.20, 0.85]))
+            renderer.pipe.transformer.load_lora_adapter.assert_called_once_with(
+                "/cache", weight_name="flux-klein-art.safetensors",
+                adapter_name="flux-klein-art", prefix=None,
+            )
             renderer.apply_style({"style": "vector", "recipeId": "vector-v1",
                                   "manifestVersion": "2026-08-21.1"})
             self.assertEqual(renderer.pipe.active, (["simplefinevector"], [1.0]))

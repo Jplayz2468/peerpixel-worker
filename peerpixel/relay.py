@@ -17,9 +17,9 @@ import json
 import struct
 
 HEADER_BYTES = 4
-#: A header is a type, an id and a length. Anything bigger is somebody trying
-#: to smuggle a payload through the part that gets parsed.
-MAX_HEADER_BYTES = 1024
+#: Routing plus pinned prompt, moderation and verification attestations. Keep
+#: this far below an image payload while leaving room for legitimate evidence.
+MAX_HEADER_BYTES = 16 * 1024
 
 #: The dispatcher refuses anything larger, so there is no point sending it.
 MAX_RESULT_BYTES = 256 * 1024

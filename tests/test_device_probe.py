@@ -142,7 +142,9 @@ class OffloadPolicyTests(unittest.TestCase):
         self.assertEqual(cuda_group_options(total=16e9, free=14e9), {
             "non_blocking": False, "use_stream": False, "record_stream": False,
             "exclude_modules": ["vae"],
+            "num_blocks_per_group": 4,
         })
+        self.assertEqual(cuda_group_options(total=12e9, free=10e9)["num_blocks_per_group"], 1)
         self.assertEqual(cuda_group_options(total=48e9, free=19e9)["use_stream"], False)
 
     def test_group_offload_keeps_the_decoder_on_cuda(self):

@@ -41,6 +41,20 @@ class RelayFrameTests(unittest.TestCase):
             relay.encode({"type": "x", "pad": "y" * relay.MAX_HEADER_BYTES})
         self.assertIsNone(relay.decode(struct.pack(">I", relay.MAX_HEADER_BYTES + 1) + b"x"))
 
+    def test_generation_attestations_fit_in_the_authenticated_header(self):
+        header = {
+            "type": "draft_result", "draftId": "draft-1",
+            "enhancedPrompt": "richly described scene " * 100,
+            "moderation": {"label": "normal", "nsfwScore": 0.00001},
+            "manifestVersion": "2026-08-21.1", "recipeId": "photoreal-v1",
+            "attestations": [{
+                "operation": name, "inputDigest": "a" * 64,
+                "outputDigest": "b" * 64, "runtimeVersion": "peerpixel-worker/0.8.5",
+            } for name in ("prompt", "render", "moderation")],
+        }
+        encoded = relay.encode(header, b"jpeg")
+        self.assertEqual(relay.decode(encoded), (header, b"jpeg"))
+
 
 if __name__ == "__main__":
     unittest.main()
