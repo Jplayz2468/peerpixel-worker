@@ -98,9 +98,10 @@ def main() -> int:
 
     master_ms = 0
     if not args.quick:
+        master_style = styles[0]
         master_ms, good, proof = render_one(
-            renderer, "master", "photoreal",
-            args.output / f"{renderer._precision_mode}-master.jpg")
+            renderer, "master", master_style,
+            args.output / f"{renderer._precision_mode}-master-{master_style}.jpg")
         valid = valid and good
         evidence.append(proof)
 
