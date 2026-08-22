@@ -16,16 +16,16 @@ Guidance costs double on top of the step count: a guided step runs the
 transformer twice, once for the prompt and once for an empty one, and mixes
 them. Fifty steps is a hundred forward passes.
 
-A **preview** is 256x256 from the prompt alone, in six steps. It exists to
+A **preview** is 128x128 from the prompt alone, in six steps. It exists to
 answer whether the composition is the one somebody wanted, and it is asked
 several times before anything is chosen, so being cheap is most of its job. It
 goes straight back down the socket rather than being uploaded anywhere.
 
-A **master** is 1024x1024, the size this checkpoint was trained at, from the
+A **master** is 512x512 at the full fifty guided steps, from the
 prompt and a seed. Nothing else. It is not conditioned on the preview that was
 chosen, does not receive it, and does not know it exists.
 
-What ties the two together is the noise. A seed names one 1024px noise tensor;
+What ties the two together is the noise. A seed names one 512px noise tensor;
 a preview renders that same tensor averaged down to its own smaller shape, so
 the two share the low-frequency structure that decides where things end up in
 the frame. See `seeded_latents`, which is also where the reason it must be an
@@ -85,19 +85,15 @@ GUIDANCE_RANGE = (1.5, 12.0)
 OPERATIONS = {
     # A preview exists to answer one question -- is this the composition I
     # wanted -- and it is asked several times before anything is chosen, so
-    # what matters about it is that it is cheap. 256px at six steps is a
-    # quarter the work of the 128px sixteen-step draft it replaces and comes
-    # back at twice the size: the step count was the expensive part, not the
-    # pixels, and six is enough for this checkpoint to settle a composition.
-    "draft": {"width": 256, "height": 256, "steps": 6, "guidance": GUIDANCE},
-    # And the master is rendered at the size the checkpoint was trained for.
-    # 512 was half of it in each direction and it showed -- FLUX.2 at 1024 puts
-    # detail where it belongs rather than smoothing it away.
-    "master": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
+    # what matters about it is that it is cheap. Six steps at 128px is enough
+    # for this checkpoint to settle a composition.
+    "draft": {"width": 128, "height": 128, "steps": 6, "guidance": GUIDANCE},
+    # The master retains the full fifty guided steps at 512px.
+    "master": {"width": 512, "height": 512, "steps": 50, "guidance": GUIDANCE},
     # A check is a master rendered a second time on a machine the operator
     # owns, so it is the same work with the same inputs. Only what happens to
     # the result differs: it is compared rather than delivered.
-    "verify": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
+    "verify": {"width": 512, "height": 512, "steps": 50, "guidance": GUIDANCE},
     # The admission test, and the only operation the network never sends. It is
     # master resolution -- that is what catches a card which cannot hold a real
     # render -- at a step count chosen to be timed rather than looked at.
@@ -108,7 +104,7 @@ OPERATIONS = {
     # the benchmark too, so a test written to run four steps ran fifty, took
     # twelve times as long as it was meant to, and was then judged against a
     # limit written for four.
-    "bench": {"width": 1024, "height": 1024, "steps": 4, "guidance": GUIDANCE},
+    "bench": {"width": 512, "height": 512, "steps": 4, "guidance": GUIDANCE},
 }
 
 #: What may arrive over the wire. `bench` is local, and a job claiming to be one

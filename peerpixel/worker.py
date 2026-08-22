@@ -34,7 +34,7 @@ from .system_status import SystemStatus
 #: The server therefore
 #: gives work only to the current version, and an old install sits connected,
 #: idle and unpaid until it is updated.
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 7
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2

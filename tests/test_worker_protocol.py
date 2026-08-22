@@ -60,6 +60,9 @@ SIZES_BY_VERSION = {
     # Styled LoRA recipes, optional Qwen prompt enhancement, a pinned auxiliary
     # model manifest, and mandatory pre-delivery moderation evidence.
     6: {"draft": (256, 6), "master": (1024, 50)},
+    # Faster pixels and measured phase reporting. Finals retain all fifty
+    # guided steps; only their spatial contract changes.
+    7: {"draft": (128, 6), "master": (512, 50)},
 }
 
 
