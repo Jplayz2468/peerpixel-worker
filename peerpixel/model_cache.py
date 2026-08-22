@@ -7,6 +7,7 @@ import os
 import urllib.error
 import urllib.request
 import tarfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import api, config
@@ -52,6 +53,30 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+@contextmanager
+def _artifact_lock(path: Path):
+    """One downloader per artifact, released by the OS even after a crash."""
+    with path.open("a+b") as lock:
+        if os.name == "nt":
+            import msvcrt
+            if lock.seek(0, os.SEEK_END) == 0:
+                lock.write(b"\0")
+                lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 def ensure(name: str, manifest: dict | None = None) -> Path:
     """Return the exact cached artifact, resuming an interrupted download safely."""
     manifest = manifest or fetch_manifest()
@@ -59,31 +84,35 @@ def ensure(name: str, manifest: dict | None = None) -> Path:
     folder = root() / manifest["version"]
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / Path(item["key"]).name
-    if target.is_file() and target.stat().st_size == item["size"] and sha256(target) == item["sha256"]:
+    with _artifact_lock(folder / f".{target.name}.lock"):
+        # Recheck after taking the lock: another process may have completed it
+        # while this caller was waiting.
+        if (target.is_file() and target.stat().st_size == item["size"]
+                and sha256(target) == item["sha256"]):
+            return target
+        target.unlink(missing_ok=True)
+        partial = target.with_suffix(target.suffix + ".part")
+        offset = partial.stat().st_size if partial.exists() else 0
+        if offset > item["size"]:
+            partial.unlink()
+            offset = 0
+        headers = {"range": f"bytes={offset}-"} if offset else {}
+        try:
+            with urllib.request.urlopen(
+                _request(f"/api/device/models/{name}", headers=headers), timeout=300,
+            ) as response, partial.open("ab" if offset else "wb") as output:
+                if offset and response.status != 206:
+                    output.seek(0)
+                    output.truncate()
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(f"model_download_failed:{name}:{error.code}") from None
+        if partial.stat().st_size != item["size"] or sha256(partial) != item["sha256"]:
+            partial.unlink(missing_ok=True)
+            raise RuntimeError(f"model_integrity_failed:{name}")
+        os.replace(partial, target)
         return target
-    target.unlink(missing_ok=True)
-    partial = target.with_suffix(target.suffix + ".part")
-    offset = partial.stat().st_size if partial.exists() else 0
-    if offset > item["size"]:
-        partial.unlink()
-        offset = 0
-    headers = {"range": f"bytes={offset}-"} if offset else {}
-    try:
-        with urllib.request.urlopen(
-            _request(f"/api/device/models/{name}", headers=headers), timeout=300,
-        ) as response, partial.open("ab" if offset else "wb") as output:
-            if offset and response.status != 206:
-                output.seek(0)
-                output.truncate()
-            while chunk := response.read(1024 * 1024):
-                output.write(chunk)
-    except urllib.error.HTTPError as error:
-        raise RuntimeError(f"model_download_failed:{name}:{error.code}") from None
-    if partial.stat().st_size != item["size"] or sha256(partial) != item["sha256"]:
-        partial.unlink(missing_ok=True)
-        raise RuntimeError(f"model_integrity_failed:{name}")
-    os.replace(partial, target)
-    return target
 
 
 def ensure_directory(name: str, manifest: dict | None = None) -> Path:
