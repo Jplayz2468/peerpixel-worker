@@ -50,6 +50,11 @@ Smaller prompt, safety, and upscale models come from PeerPixel's private, signed
 registry only when first needed. Hashes and manifest signatures are checked
 before anything is loaded, and downloads resume after interruption.
 
+Apple-silicon Macs render through the published MLX 4-bit FLUX.2 Klein Base
+package. Their real benchmark is used for scheduling: current Macs are much
+slower than recent NVIDIA cards and may receive very few image jobs, but remain
+useful for verification and transient upscaling work.
+
 > On macOS, anything downloaded from the internet is quarantined until you have
 > opened it once deliberately: right-click `PeerPixel.command` and choose
 > **Open**, then **Open** again. After that it is an ordinary double-click.

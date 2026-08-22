@@ -109,7 +109,7 @@ def fetch_model() -> None:
 
 
 def benchmark() -> dict:
-    from .benchmark import estimated_master_ms, likely_generation_work, run_benchmark
+    from .benchmark import generation_warning, likely_generation_work, run_benchmark
     from .render import Renderer
 
     def work(made):
@@ -141,10 +141,7 @@ def benchmark() -> dict:
                 "network will not send it work.")
         note("Nothing is wrong with it. It is just slower than a render can afford.")
     elif not likely_generation_work(ms):
-        estimate = estimated_master_ms(ms)
-        note(f"A full high-resolution render is estimated at about {estimate / 1000:.0f}s. "
-             "Faster machines are preferred, so this machine may earn few generation "
-             "credits; it remains useful for drafts, verification and upscaling.")
+        note(generation_warning(ms, renderer.accelerator))
     return result
 
 
@@ -380,6 +377,8 @@ def show_settings() -> None:
 
 
 def cmd_status(_argv: list[str]) -> None:
+    from .benchmark import generation_warning
+
     saved = config.read()
     where = state()
     title("This machine")
@@ -389,6 +388,10 @@ def cmd_status(_argv: list[str]) -> None:
               saved.get("deviceId", "") if where["paired"] else "run: peerpixel pair CODE")
     step_line(where["approved"], "Speed check",
               f"{saved.get('benchMs', 0) / 1000:.1f}s" if saved.get("benchMs") else "")
+    warning = generation_warning(saved.get("benchMs", 0), saved.get("accelerator", "")) \
+        if saved.get("benchMs") else ""
+    if warning:
+        note(warning)
 
     title("The pool")
     try:

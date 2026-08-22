@@ -36,6 +36,19 @@ def likely_generation_work(bench_ms: int) -> bool:
     return estimated_master_ms(bench_ms) <= GENERATION_TARGET_MS
 
 
+def generation_warning(bench_ms: int, accelerator: str) -> str:
+    if likely_generation_work(bench_ms):
+        return ""
+    estimate = estimated_master_ms(bench_ms)
+    if "Apple silicon" in accelerator or "MLX" in accelerator:
+        return (f"A 512px render is estimated at about {estimate / 1000:.0f}s. "
+                "Macs are slower than current NVIDIA workers and may receive very few image jobs; "
+                "this Mac remains useful for verification and upscaling.")
+    return (f"A full high-resolution render is estimated at about {estimate / 1000:.0f}s. "
+            "Faster machines are preferred, so this machine may earn few generation credits; "
+            "it remains useful for drafts, verification and upscaling.")
+
+
 def qualify_candidate(baseline_ms: int, candidate_ms: int, *, valid,
                       quality_passed: bool) -> dict:
     """Apply the release gate to one matching warm render."""

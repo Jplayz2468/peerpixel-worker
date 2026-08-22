@@ -529,6 +529,11 @@ class Renderer:
         self._enhancer = None
         self._safety = None
         self._device, self._dtype, self.accelerator, self._total = pick_device()
+        self._mlx_backend = None
+        if self._device == "mps":
+            from .mlx_backend import MLXBackend
+            self._mlx_backend = MLXBackend()
+            self.accelerator = self.accelerator.replace("Apple silicon", "Apple silicon MLX q4")
         self._memory_mode = None
         self._forced_memory_mode = None
         self._precision_mode = "native"
@@ -537,6 +542,14 @@ class Renderer:
     def warm(self):
         """Load once and keep it. A 4B model takes tens of seconds to load."""
         if self.pipe is not None:
+            return
+        if getattr(self, "_mlx_backend", None) is not None:
+            started = time.time()
+            self._mlx_backend.ensure_model()
+            self.pipe = self._mlx_backend
+            self._precision_mode = "mlx-q4"
+            self._memory_mode = "resident"
+            self.load_seconds = time.time() - started
             return
         import torch  # noqa: F401
         from diffusers import Flux2KleinPipeline
@@ -661,7 +674,7 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.8.5"
+        runtime = "peerpixel-worker/0.8.6"
         return jpeg, {
             "enhancedPrompt": effective,
             "moderation": moderation,
@@ -767,6 +780,25 @@ class Renderer:
     def _render(self, job: dict, on_step=None, on_decode=None, on_phase=None) -> bytes:
         self.warm()
         spec = operation_of(job)
+        if getattr(self, "_mlx_backend", None) is not None:
+            if on_phase is not None:
+                on_phase("encoding_prompt")
+            if spec["name"] != "bench" and ("style" in job or "recipeId" in job):
+                if on_phase is not None:
+                    on_phase("loading_style")
+                self._style_mode = self.apply_style(job)
+            if on_phase is not None:
+                on_phase("rendering")
+            jpeg = self._mlx_backend.render(
+                prompt=job["prompt"], width=spec["width"], height=spec["height"],
+                steps=spec["steps"], guidance=spec["guidance"],
+                seed=job.get("seed", 0), on_step=on_step,
+            )
+            if on_phase is not None:
+                on_phase("decoding")
+            if on_decode is not None:
+                on_decode()
+            return jpeg
         prompt_embeds = negative_prompt_embeds = None
         if on_phase is not None:
             on_phase("encoding_prompt")

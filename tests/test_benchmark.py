@@ -1,7 +1,7 @@
 import unittest
 
 from peerpixel.benchmark import (
-    BENCH_STEPS, JOB, estimated_master_ms, likely_generation_work,
+    BENCH_STEPS, JOB, estimated_master_ms, generation_warning, likely_generation_work,
     qualify_candidate, run_benchmark,
 )
 from peerpixel.render import NETWORK_OPERATIONS, OPERATIONS
@@ -48,6 +48,9 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(likely_generation_work(4_000))
         self.assertEqual(estimated_master_ms(8_000), 100_000)
         self.assertFalse(likely_generation_work(8_000))
+        warning = generation_warning(8_000, "Apple silicon MLX q4")
+        self.assertIn("few image jobs", warning)
+        self.assertIn("verification and upscaling", warning)
 
     def test_only_second_render_is_timed_and_submitted(self):
         renderer = FakeRenderer()

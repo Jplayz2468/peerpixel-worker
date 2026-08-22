@@ -117,6 +117,33 @@ class DraftTests(unittest.TestCase):
         self.assertEqual(call["generator"].initial_seed(), 7)
         self.assertTrue(jpeg.startswith(b"\xff\xd8\xff"))
 
+    def test_apple_silicon_renderer_preserves_the_network_contract_through_mlx(self):
+        class Backend:
+            def render(self, **kwargs):
+                self.kwargs = kwargs
+                kwargs["on_step"](50, 50)
+                return a_jpeg((512, 512))
+
+        backend = Backend()
+        renderer = render.Renderer.__new__(render.Renderer)
+        renderer._mlx_backend = backend
+        renderer._device = "mps"
+        renderer._style_mode = "prompt_only"
+        renderer.warm = lambda: None
+        renderer.apply_style = lambda _job: "prompt_only"
+        steps = []
+        jpeg = renderer._render({
+            "prompt": "a quiet harbour", "seed": 7, "operation": "master",
+            "style": "photoreal", "recipeId": "photoreal-v2",
+            "manifestVersion": render.MANIFEST_VERSION,
+        }, on_step=lambda done, total: steps.append((done, total)))
+        self.assertTrue(jpeg.startswith(b"\xff\xd8\xff"))
+        self.assertEqual(backend.kwargs["width"], 512)
+        self.assertEqual(backend.kwargs["steps"], 50)
+        self.assertEqual(backend.kwargs["guidance"], 4.0)
+        self.assertEqual(backend.kwargs["seed"], 7)
+        self.assertEqual(steps, [(50, 50)])
+
     def test_a_preview_reports_every_step_it_runs(self):
         # Read from the table rather than written out, because the point of
         # this test is that nothing is skipped -- not what the number is. The
