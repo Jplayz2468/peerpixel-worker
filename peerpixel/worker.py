@@ -302,7 +302,11 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
     from .job_phases import PhaseReporter
 
     reporter = PhaseReporter(
-        job["id"], lambda event: link.send(json.dumps(event)),
+        job["id"], lambda event: link.send(json.dumps({
+            **event,
+            "precision": getattr(renderer, "_precision_mode", "native"),
+            "memoryMode": getattr(renderer, "_memory_mode", "unknown"),
+        })),
         scope=f"{operation}:{job.get('width', 0)}:{getattr(renderer, '_precision_mode', 'native')}:{getattr(renderer, '_memory_mode', 'unknown')}",
         persist=True,
     )

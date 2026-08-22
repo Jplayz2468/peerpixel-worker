@@ -66,6 +66,7 @@ class PhaseReporter:
             "type": "phase", "jobId": self.job_id, "phase": phase,
             "at": round(self.wall() * 1000),
             "elapsedMs": max(0, round((now - self.started) * 1000)),
+            "phaseEstimates": dict(self.estimates),
         }
         if detail:
             event["detail"] = str(detail)[:160]
