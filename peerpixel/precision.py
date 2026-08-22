@@ -28,15 +28,15 @@ def select_precision(probe: Probe, requested: str | None = None) -> PrecisionPla
         return PrecisionPlan("native", True, True, "non-CUDA native precision")
     if not probe.bitsandbytes:
         return PrecisionPlan("unavailable", False, False,
-                             "bitsandbytes unavailable; consistent int8 images disabled")
+                             "bitsandbytes unavailable; consistent NF4 images disabled")
     if probe.capability < (7, 5):
         return PrecisionPlan("unavailable", False, False,
-                             "CUDA capability is below the network int8 path")
-    if probe.total >= 12_000_000_000 and probe.free >= 10_000_000_000:
-        return PrecisionPlan("int8", True, False,
-                             "network-standard resident 8-bit weights")
+                             "CUDA capability is below the network NF4 path")
+    if probe.total >= 8_000_000_000 and probe.free >= 6_000_000_000:
+        return PrecisionPlan("int4", True, False,
+                             "network-standard resident NF4 weights with BF16 compute")
     return PrecisionPlan("unavailable", False, False,
-                         "image generation requires 12 GB VRAM for consistent int8 quality")
+                         "image generation requires 8 GB VRAM for consistent NF4 quality")
 
 
 def runtime_probe(*, total: int, free: int) -> Probe:

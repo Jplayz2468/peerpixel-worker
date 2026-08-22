@@ -4,20 +4,20 @@ from peerpixel.precision import Probe, select_precision
 
 
 class PrecisionPolicyTests(unittest.TestCase):
-    def test_all_eligible_cuda_cards_use_the_same_resident_eight_bit_precision(self):
+    def test_all_eligible_cuda_cards_use_the_same_resident_nf4_precision(self):
         plan = select_precision(Probe(
             cuda=True, capability=(12, 0), total=16_000_000_000,
             free=15_000_000_000, bitsandbytes=True,
         ))
         self.assertEqual((plan.mode, plan.resident, plan.adapters),
-                         ("int8", True, False))
+                         ("int4", True, False))
 
-    def test_an_8gb_card_is_not_eligible_for_inconsistent_image_precision(self):
+    def test_an_8gb_card_uses_the_same_nf4_image_precision(self):
         plan = select_precision(Probe(
             cuda=True, capability=(8, 9), total=8_000_000_000,
             free=7_000_000_000, bitsandbytes=True,
         ))
-        self.assertEqual((plan.mode, plan.resident), ("unavailable", False))
+        self.assertEqual((plan.mode, plan.resident), ("int4", True))
 
     def test_missing_backend_rejects_image_generation_instead_of_changing_precision(self):
         plan = select_precision(Probe(
@@ -43,7 +43,7 @@ class PrecisionPolicyTests(unittest.TestCase):
             cuda=True, capability=(12, 0), total=16_000_000_000,
             free=15_000_000_000, bitsandbytes=True,
         ), requested="bfloat16")
-        self.assertEqual((plan.mode, plan.resident), ("int8", True))
+        self.assertEqual((plan.mode, plan.resident), ("int4", True))
 
 
 if __name__ == "__main__":

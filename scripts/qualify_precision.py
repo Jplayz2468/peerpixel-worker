@@ -90,7 +90,8 @@ def main() -> int:
     styles = args.style or list(PROMPTS)
     for style in styles:
         elapsed, good, proof = render_one(
-            renderer, "draft", style, args.output / f"int8-draft-{style}.jpg")
+            renderer, "draft", style,
+            args.output / f"{renderer._precision_mode}-draft-{style}.jpg")
         draft_times.append(elapsed)
         valid = valid and good
         evidence.append(proof)
@@ -98,7 +99,8 @@ def main() -> int:
     master_ms = 0
     if not args.quick:
         master_ms, good, proof = render_one(
-            renderer, "master", "photoreal", args.output / "int8-master.jpg")
+            renderer, "master", "photoreal",
+            args.output / f"{renderer._precision_mode}-master.jpg")
         valid = valid and good
         evidence.append(proof)
 
