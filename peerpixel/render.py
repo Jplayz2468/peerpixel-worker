@@ -684,6 +684,9 @@ class Renderer:
         from .prompt_enhancer import PromptEnhancer
         from .safety import SafetyClassifier
 
+        on_phase = render_options.get("on_phase")
+        if on_phase is not None:
+            on_phase("enhancing_prompt")
         if self._enhancer is None:
             self._enhancer = PromptEnhancer()
         effective = self._enhancer.enhance(
@@ -696,6 +699,8 @@ class Renderer:
         self._enhancer.unload()
         resolved = {**job, "prompt": effective}
         jpeg = self.render(resolved, **render_options)
+        if on_phase is not None:
+            on_phase("safety_check")
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
@@ -771,7 +776,7 @@ class Renderer:
         self.warm()
 
     def render(self, job: dict, on_step=None, reference: bytes | None = None,
-               on_demote=None, on_decode=None) -> bytes:
+               on_demote=None, on_decode=None, on_phase=None) -> bytes:
         """Render, and never hand back something that is not a picture.
 
         One retry, on the next precision down, because the failure this catches
@@ -780,14 +785,16 @@ class Renderer:
         using the precision that caused it.
         """
         try:
-            return self._render(job, on_step=on_step, on_decode=on_decode)
+            return self._render(job, on_step=on_step, on_decode=on_decode,
+                                on_phase=on_phase)
         except RuntimeError as error:
             if self._device != "cuda" or self._memory_mode == "sequential" or not _cuda_oom(error):
                 raise
             if on_demote is not None:
                 on_demote("low-memory CUDA")
             self._retry_low_memory()
-            return self._render(job, on_step=on_step, on_decode=on_decode)
+            return self._render(job, on_step=on_step, on_decode=on_decode,
+                                on_phase=on_phase)
         except _Nonsense:
             chosen = self.demote()
             if chosen is None:
@@ -796,14 +803,24 @@ class Renderer:
                 on_demote(chosen)
             print(f"that render came out as nan; retrying in {chosen}", flush=True)
         try:
-            return self._render(job, on_step=on_step, on_decode=on_decode)
+            return self._render(job, on_step=on_step, on_decode=on_decode,
+                                on_phase=on_phase)
         except _Nonsense:
             raise RuntimeError(BROKEN) from None
 
-    def _render(self, job: dict, on_step=None, on_decode=None) -> bytes:
+    def _render(self, job: dict, on_step=None, on_decode=None, on_phase=None) -> bytes:
         self.warm()
         spec = operation_of(job)
+        prompt_embeds = negative_prompt_embeds = None
+        if on_phase is not None:
+            on_phase("encoding_prompt")
+        if hasattr(self.pipe, "encode_prompt"):
+            prompt_embeds, _ = self.pipe.encode_prompt(job["prompt"])
+            if spec["guidance"] > 1:
+                negative_prompt_embeds, _ = self.pipe.encode_prompt("")
         if spec["name"] != "bench" and ("style" in job or "recipeId" in job):
+            if on_phase is not None:
+                on_phase("loading_style")
             self._style_mode = self.apply_style(job)
         width, height, steps = spec["width"], spec["height"], spec["steps"]
 
@@ -813,10 +830,21 @@ class Renderer:
         # still sending one gets a correct render rather than an error.
         latents = seeded_latents(self.pipe, spec, job.get("seed", 0), self._dtype)
 
-        watch = _Watch(on_step, steps, on_last=on_decode)
+        def decoding():
+            if on_phase is not None:
+                on_phase("decoding")
+            if on_decode is not None:
+                on_decode()
+
+        watch = _Watch(on_step, steps, on_last=decoding)
+
+        if on_phase is not None:
+            on_phase("rendering")
 
         image = self.pipe(
-            prompt=job["prompt"],
+            prompt=None if prompt_embeds is not None else job["prompt"],
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
             num_inference_steps=steps,
             # Real classifier-free guidance, which the pipeline enables only
             # because this checkpoint is not distilled. The negative side is an

@@ -299,6 +299,14 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
     bar = plans.tracker("job", {"job.render": seconds_per_step(operation) * steps})
     started = time.monotonic()
     earned = 0.0
+    from .job_phases import PhaseReporter
+
+    reporter = PhaseReporter(
+        job["id"], lambda event: link.send(json.dumps(event)),
+        scope=f"{operation}:{job.get('width', 0)}:{getattr(renderer, '_precision_mode', 'native')}:{getattr(renderer, '_memory_mode', 'unknown')}",
+        persist=True,
+    )
+    reporter.begin("preparing")
 
     def stepped(done: int, total: int) -> None:
         bar.report(done, total, detail=f"step {done} of {total}")
@@ -317,6 +325,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
         with console.Live(bar, heading=heading,
                           footer=hardware.line if hardware else None):
             if getattr(renderer, "pipe", None) is None:
+                reporter.begin("loading_flux")
                 bar.begin("load")
                 renderer.warm()
 
@@ -329,6 +338,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 "on_step": stepped,
                 "on_decode": lambda: bar.begin("decode"),
                 "on_demote": lambda name: bar.note(f"retrying in {name}"),
+                "on_phase": reporter.begin,
             }
             observed_digest = None
             if operation == "auxiliary_verify":
@@ -382,6 +392,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                     "recipeId": job.get("recipeId", "photoreal-v1"),
                 }
             session.learn(operation, time.monotonic() - render_started, steps)
+            reporter.begin("delivering")
             bar.begin("deliver")
             if settings.keep_last():
                 try:
@@ -420,6 +431,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 }, jpeg))
                 earned = result.get("earnedCredits", 0) or 0
                 link.send(json.dumps({"type": "finished", "jobId": job["id"]}))
+            reporter.begin("complete")
             bar.finish()
     except Exception as error:  # noqa: BLE001 - one bad job must not end the run
         say(f"  {console.RED}failed: {error}{OFF}")
