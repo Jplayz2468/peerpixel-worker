@@ -26,23 +26,17 @@ def select_precision(probe: Probe, requested: str | None = None) -> PrecisionPla
     """Choose residency from capabilities, never a hostname or GPU label."""
     if not probe.cuda:
         return PrecisionPlan("native", True, True, "non-CUDA native precision")
-    if requested in {"bfloat16", "float16", "float32"}:
-        return PrecisionPlan(requested, probe.total >= 24_000_000_000, True,
-                             "operator-requested native precision")
     if not probe.bitsandbytes:
-        return PrecisionPlan("bfloat16", False, True,
-                             "bitsandbytes unavailable; using BF16 group offload")
+        return PrecisionPlan("unavailable", False, False,
+                             "bitsandbytes unavailable; consistent int8 images disabled")
     if probe.capability < (7, 5):
-        return PrecisionPlan("bfloat16", False, True,
-                             "CUDA capability is below the quantized resident path")
+        return PrecisionPlan("unavailable", False, False,
+                             "CUDA capability is below the network int8 path")
     if probe.total >= 12_000_000_000 and probe.free >= 10_000_000_000:
         return PrecisionPlan("int8", True, False,
-                             "resident 8-bit weights; adapters disabled for headroom")
-    if probe.total >= 8_000_000_000 and probe.free >= 6_000_000_000:
-        return PrecisionPlan("int4", True, False,
-                             "resident NF4 weights; adapters disabled for headroom")
-    return PrecisionPlan("bfloat16", False, True,
-                         "insufficient free VRAM for a resident quantized pipeline")
+                             "network-standard resident 8-bit weights")
+    return PrecisionPlan("unavailable", False, False,
+                         "image generation requires 12 GB VRAM for consistent int8 quality")
 
 
 def runtime_probe(*, total: int, free: int) -> Probe:

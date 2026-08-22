@@ -7,13 +7,14 @@ There are three kinds of job. A **draft** is small and quick: somebody is
 working out whether a composition is the one they wanted, and they are asking
 several times. It never becomes a file -- the JPEG goes back down this socket
 and is relayed straight to their browser. A **master** is the full picture at
-1024x1024, rendered from nothing but a prompt and a seed. An **upscale** runs
+512x512, rendered from nothing but a prompt and a seed. An **upscale** runs
 AuraSR-v2 only after somebody chooses the paid 4x download; those bytes go
 straight to that browser and are never saved by the server.
 
 Each enhanced draft runs Qwen3-0.6B independently with its own variation seed.
 The selected draft's enhanced prompt is then reused verbatim for its master.
-Photoreal, anime, and vector jobs activate only their pinned LoRA recipe. Every
+Seven prompt-only styles use distinct Qwen medium directives; style selection
+never loads or stacks adapter weights. Every
 render is classified locally before delivery, and prompt, moderation, render,
 and upscale operations all return evidence for random trusted-user rechecks.
 
@@ -45,7 +46,7 @@ can happen in. Everything lands inside this folder or in the usual per-user
 caches. Nothing is installed system-wide and nothing needs administrator rights.
 
 The first run downloads the 4B base model from its pinned Hugging Face revision.
-Smaller models and LoRAs come from PeerPixel's private, signed Cloudflare R2
+Smaller prompt, safety, and upscale models come from PeerPixel's private, signed Cloudflare R2
 registry only when first needed. Hashes and manifest signatures are checked
 before anything is loaded, and downloads resume after interruption.
 

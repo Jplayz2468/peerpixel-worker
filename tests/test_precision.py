@@ -4,7 +4,7 @@ from peerpixel.precision import Probe, select_precision
 
 
 class PrecisionPolicyTests(unittest.TestCase):
-    def test_a_16gb_blackwell_card_prefers_resident_eight_bit(self):
+    def test_all_eligible_cuda_cards_use_the_same_resident_eight_bit_precision(self):
         plan = select_precision(Probe(
             cuda=True, capability=(12, 0), total=16_000_000_000,
             free=15_000_000_000, bitsandbytes=True,
@@ -12,31 +12,38 @@ class PrecisionPolicyTests(unittest.TestCase):
         self.assertEqual((plan.mode, plan.resident, plan.adapters),
                          ("int8", True, False))
 
-    def test_an_8gb_card_prefers_resident_four_bit(self):
+    def test_an_8gb_card_is_not_eligible_for_inconsistent_image_precision(self):
         plan = select_precision(Probe(
             cuda=True, capability=(8, 9), total=8_000_000_000,
             free=7_000_000_000, bitsandbytes=True,
         ))
-        self.assertEqual((plan.mode, plan.resident), ("int4", True))
+        self.assertEqual((plan.mode, plan.resident), ("unavailable", False))
 
-    def test_missing_backend_falls_back_without_host_specific_rules(self):
+    def test_missing_backend_rejects_image_generation_instead_of_changing_precision(self):
         plan = select_precision(Probe(
             cuda=True, capability=(8, 9), total=12_000_000_000,
             free=10_000_000_000, bitsandbytes=False,
         ))
-        self.assertEqual((plan.mode, plan.resident), ("bfloat16", False))
+        self.assertEqual((plan.mode, plan.resident), ("unavailable", False))
         self.assertIn("bitsandbytes", plan.reason)
 
     def test_non_cuda_keeps_the_native_resident_path(self):
         plan = select_precision(Probe(cuda=False))
         self.assertEqual((plan.mode, plan.resident), ("native", True))
 
-    def test_too_little_free_memory_uses_the_safe_fallback(self):
+    def test_too_little_free_memory_rejects_instead_of_changing_precision(self):
         plan = select_precision(Probe(
             cuda=True, capability=(12, 0), total=16_000_000_000,
             free=4_000_000_000, bitsandbytes=True,
         ))
-        self.assertEqual((plan.mode, plan.resident), ("bfloat16", False))
+        self.assertEqual((plan.mode, plan.resident), ("unavailable", False))
+
+    def test_operator_cannot_change_network_image_precision(self):
+        plan = select_precision(Probe(
+            cuda=True, capability=(12, 0), total=16_000_000_000,
+            free=15_000_000_000, bitsandbytes=True,
+        ), requested="bfloat16")
+        self.assertEqual((plan.mode, plan.resident), ("int8", True))
 
 
 if __name__ == "__main__":

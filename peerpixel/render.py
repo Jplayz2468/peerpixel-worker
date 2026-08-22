@@ -112,19 +112,11 @@ OPERATIONS = {
 NETWORK_OPERATIONS = ("draft", "master", "verify")
 MANIFEST_VERSION = "2026-08-21.1"
 STYLE_RECIPES = {
-    "photoreal": ("photoreal-v1", (("rebelmidjourney", 0.65),)),
-    "anime": ("anime-v1", (("rebelmidjourney", 0.20), ("flux-klein-art", 0.85))),
-    "vector": ("vector-v1", (("simplefinevector", 1.00),)),
+    name: (f"{name}-v2", ()) for name in (
+        "photoreal", "anime", "vector", "cinematic", "watercolor",
+        "illustration", "pixel_art",
+    )
 }
-
-
-def lora_uses_raw_peft_keys(path) -> bool:
-    """Recognize trainer-native transformer keys that lack Diffusers' prefix."""
-    from safetensors import safe_open
-
-    with safe_open(str(path), framework="pt", device="cpu") as weights:
-        first = next(iter(weights.keys()), "")
-    return first.startswith(("single_transformer_blocks.", "transformer_blocks."))
 
 
 def _digest(value) -> str:
@@ -534,14 +526,12 @@ class Renderer:
 
     def __init__(self):
         self.pipe = None
-        self._loaded_adapters = set()
         self._enhancer = None
         self._safety = None
         self._device, self._dtype, self.accelerator, self._total = pick_device()
         self._memory_mode = None
         self._forced_memory_mode = None
         self._precision_mode = "native"
-        self._adapters_enabled = True
         self._style_mode = "prompt_only"
 
     def warm(self):
@@ -565,7 +555,8 @@ class Renderer:
         requested_precision = os.environ.get("PEERPIXEL_DTYPE") or config.read().get("dtype")
         plan = select_precision(runtime_probe(total=total, free=free), requested_precision) if device == "cuda" else None
         self._precision_mode = plan.mode if plan is not None else str(dtype).split(".")[-1]
-        self._adapters_enabled = plan.adapters if plan is not None else True
+        if plan is not None and plan.mode == "unavailable":
+            raise RuntimeError(plan.reason)
 
         # `dtype`, not `torch_dtype`: the old spelling is deprecated and prints
         # a warning across whatever is being drawn at the time.
@@ -578,19 +569,10 @@ class Renderer:
         try:
             pipe = Flux2KleinPipeline.from_pretrained(MODEL, **load_options)
         except Exception:
-            if plan is None or plan.mode not in {"int8", "int4"}:
-                raise
-            # Backend or driver incompatibility must degrade to the proven path,
-            # not make the worker unusable.
-            import gc
-            gc.collect()
-            _tried(torch.cuda.empty_cache, None)
-            plan = select_precision(runtime_probe(total=total, free=free),
-                                    requested="bfloat16")
-            self._precision_mode = "bfloat16"
-            self._adapters_enabled = True
-            pipe = Flux2KleinPipeline.from_pretrained(
-                MODEL, revision=REVISION, dtype=torch.bfloat16)
+            # A worker must never silently produce a different-quality image.
+            # Quantization failures make image rendering unavailable while the
+            # machine can continue serving its auxiliary model capabilities.
+            raise
 
         # Under roughly 24 GB the transformer and the text encoder cannot both
         # sit on the accelerator. Handing them over a layer at a time is slower
@@ -641,44 +623,18 @@ class Renderer:
         self.pipe = pipe
         self.load_seconds = time.time() - started
 
-    def apply_style(self, job: dict) -> None:
-        """Load the exact LoRA recipe lazily and activate only its adapters."""
-        from . import model_cache
-
+    def apply_style(self, job: dict) -> str:
+        """Validate the prompt-only style recipe without mutating the pipeline."""
         style = job.get("style", "photoreal")
         recipe = STYLE_RECIPES.get(style)
         if recipe is None:
             raise ValueError(f"unknown_style:{style}")
-        recipe_id, adapters = recipe
+        recipe_id, _adapters = recipe
         if job.get("recipeId", recipe_id) != recipe_id:
             raise ValueError("wrong_style_recipe")
         if job.get("manifestVersion", MANIFEST_VERSION) != MANIFEST_VERSION:
             raise ValueError("wrong_model_manifest")
-        if not self._adapters_enabled:
-            return "prompt_only"
-        try:
-            for name, _weight in adapters:
-                if name in self._loaded_adapters:
-                    continue
-                path = model_cache.ensure(name)
-                if lora_uses_raw_peft_keys(path):
-                    self.pipe.transformer.load_lora_adapter(
-                        str(path.parent), weight_name=path.name,
-                        adapter_name=name, prefix=None,
-                    )
-                else:
-                    self.pipe.load_lora_weights(
-                        str(path.parent), weight_name=path.name, adapter_name=name,
-                    )
-                self._loaded_adapters.add(name)
-            self.pipe.set_adapters(
-                [name for name, _weight in adapters],
-                adapter_weights=[weight for _name, weight in adapters],
-            )
-            return "adapters"
-        except Exception:  # noqa: BLE001 - style adapters are explicitly optional
-            _tried(getattr(self.pipe, "disable_lora", lambda: None), None)
-            return "prompt_only"
+        return "prompt_only"
 
     def generate_job(self, job: dict, **render_options):
         """Polish, style, render, then classify locally in that exact order."""
@@ -757,7 +713,6 @@ class Renderer:
             return
         old = self.pipe
         self.pipe = None
-        self._loaded_adapters.clear()
         del old
         try:
             import gc

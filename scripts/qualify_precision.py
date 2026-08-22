@@ -24,6 +24,10 @@ PROMPTS = {
     "photoreal": "a red bicycle beside a rain-wet brick wall at blue hour",
     "anime": "a young astronomer looking through a brass telescope under a starry sky",
     "vector": "a cheerful orange fox carrying a green leaf on a white background",
+    "cinematic": "an explorer crossing a glass bridge above a misty canyon at dawn",
+    "watercolor": "a small blue cottage surrounded by wildflowers in spring rain",
+    "illustration": "a curious badger arranging books in a moonlit library",
+    "pixel_art": "a tiny knight beside a glowing crystal cave entrance",
 }
 
 
@@ -54,8 +58,9 @@ def render_one(renderer, operation: str, style: str, output: Path):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("auto", "bfloat16"), default="auto")
-    parser.add_argument("--quick", action="store_true", help="three drafts only")
+    parser.add_argument("--quick", action="store_true", help="drafts only")
+    parser.add_argument("--style", choices=tuple(PROMPTS), action="append",
+                        help="render only this style; may be repeated")
     parser.add_argument("--baseline-draft-ms", type=int, default=0)
     parser.add_argument("--baseline-master-ms", type=int, default=0)
     parser.add_argument("--approve-quality", action="store_true")
@@ -63,19 +68,15 @@ def main() -> int:
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
 
-    if args.mode == "bfloat16":
-        os.environ["PEERPIXEL_DTYPE"] = "bfloat16"
-    else:
-        os.environ.pop("PEERPIXEL_DTYPE", None)
-        saved = config.read()
-        if saved.get("dtype"):
-            config.write(dtype="")
+    os.environ.pop("PEERPIXEL_DTYPE", None)
+    saved = config.read()
+    if saved.get("dtype"):
+        config.write(dtype="")
 
     renderer = Renderer()
     renderer.warm()
     # Compare the base model in both precisions. Adapters are a separate,
     # optional optimization dimension and may not decide whether residency works.
-    renderer._adapters_enabled = False
     try:
         import torch
         if renderer._device == "cuda":
@@ -86,9 +87,10 @@ def main() -> int:
     draft_times = []
     valid = True
     evidence = []
-    for style in PROMPTS:
+    styles = args.style or list(PROMPTS)
+    for style in styles:
         elapsed, good, proof = render_one(
-            renderer, "draft", style, args.output / f"{args.mode}-draft-{style}.jpg")
+            renderer, "draft", style, args.output / f"int8-draft-{style}.jpg")
         draft_times.append(elapsed)
         valid = valid and good
         evidence.append(proof)
@@ -96,7 +98,7 @@ def main() -> int:
     master_ms = 0
     if not args.quick:
         master_ms, good, proof = render_one(
-            renderer, "master", "photoreal", args.output / f"{args.mode}-master.jpg")
+            renderer, "master", "photoreal", args.output / "int8-master.jpg")
         valid = valid and good
         evidence.append(proof)
 

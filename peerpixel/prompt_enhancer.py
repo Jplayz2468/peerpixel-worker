@@ -11,7 +11,14 @@ Behavior:
 Style Directives:
 - PHOTOREAL: Direct candid 35mm photography, natural lighting, sharp depth of field, fine skin pores, authentic textures, unretouched film look.
 - ANIME: Direct 1990s retro 2D anime cel aesthetic, crisp dark ink line-art, flat vibrant color fills, painted watercolor backgrounds.
-- VECTOR: Direct flat 2D graphic vector art, clean geometric silhouettes, solid color planes, pure solid background, zero 3D gradients or depth."""
+- VECTOR: Direct flat 2D graphic vector art, clean geometric silhouettes, solid color planes, pure solid background, zero 3D gradients or depth.
+- CINEMATIC: Direct dramatic widescreen cinema still, motivated lighting, intentional lens choice, atmospheric depth, rich filmic color, natural production design.
+- WATERCOLOR: Direct traditional watercolor painting on textured cold-press paper, translucent pigment washes, soft blooms, expressive edges, visible granulation.
+- ILLUSTRATION: Direct polished editorial illustration, confident shapes, expressive linework, layered color, clear visual hierarchy, handcrafted print texture.
+- PIXEL_ART: Direct handcrafted pixel art, crisp pixel clusters, limited color palette, deliberate dithering, readable silhouettes, zero smoothing or antialiasing."""
+
+STYLES = ("photoreal", "anime", "vector", "cinematic", "watercolor",
+          "illustration", "pixel_art")
 
 
 def enhancement_messages(prompt: str, style: str, variation=None) -> list[dict[str, str]]:
@@ -49,7 +56,7 @@ class PromptEnhancer:
             return str(resolved).strip()
         if not enabled:
             return prompt.strip()
-        if style not in ("photoreal", "anime", "vector"):
+        if style not in STYLES:
             raise ValueError(f"unknown_style:{style}")
         self.warm()
         messages = enhancement_messages(prompt, style, variation)
