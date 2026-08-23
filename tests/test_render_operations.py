@@ -133,7 +133,8 @@ class DraftTests(unittest.TestCase):
         renderer.apply_style = lambda _job: "prompt_only"
         steps = []
         jpeg = renderer._render({
-            "prompt": "a quiet harbour", "seed": 7, "operation": "master",
+            "prompt": "a quiet harbour", "negativePrompt": "watermark, blur",
+            "seed": 7, "operation": "master",
             "style": "photoreal", "recipeId": "photoreal-v2",
             "manifestVersion": render.MANIFEST_VERSION,
         }, on_step=lambda done, total: steps.append((done, total)))
@@ -142,6 +143,7 @@ class DraftTests(unittest.TestCase):
         self.assertEqual(backend.kwargs["steps"], 50)
         self.assertEqual(backend.kwargs["guidance"], 4.0)
         self.assertEqual(backend.kwargs["seed"], 7)
+        self.assertEqual(backend.kwargs["negative_prompt"], "watermark, blur")
         self.assertEqual(steps, [(50, 50)])
 
     def test_a_preview_reports_every_step_it_runs(self):
@@ -259,6 +261,15 @@ class GuidanceTests(unittest.TestCase):
             pipe = FakePipeline()
             renderer_with(pipe).render({"prompt": "x", "seed": 1, "operation": operation})
             self.assertEqual(pipe.calls[0]["guidance_scale"], 4.0)
+
+    def test_diffusers_receives_the_generated_negative_prompt(self):
+        pipe = FakePipeline()
+        renderer_with(pipe).render({
+            "prompt": "a fox", "negativePrompt": "watermark, duplicate animals",
+            "seed": 1, "operation": "master",
+        })
+        self.assertEqual(pipe.calls[0]["negative_prompt"],
+                         "watermark, duplicate animals")
 
     def test_the_server_may_retune_guidance_without_a_worker_release(self):
         """The reason guidance is read from the payload at all."""

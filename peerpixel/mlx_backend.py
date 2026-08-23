@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 
@@ -32,16 +33,37 @@ class MLXBackend:
             check=True, text=True,
         )
 
+    def python_executable(self) -> str:
+        """Return the interpreter that owns the mlxgen console script.
+
+        mlx-gen is commonly installed as an isolated uv tool while PeerPixel
+        runs in its own environment. Reusing the console script's shebang lets
+        our tiny runner import the exact same mflux installation.
+        """
+        try:
+            first = Path(self.executable).read_text(encoding="utf-8").splitlines()[0]
+            if first.startswith("#!") and first[2:].strip():
+                return first[2:].strip()
+        except (OSError, UnicodeError, IndexError):
+            pass
+        executable = Path(self.executable)
+        if executable.is_absolute():
+            return str(executable.with_name("python"))
+        return sys.executable
+
     def render(self, *, prompt: str, width: int, height: int, steps: int,
-               guidance: float, seed: int, on_step=None) -> bytes:
+               guidance: float, seed: int, negative_prompt: str = "", on_step=None) -> bytes:
         with tempfile.TemporaryDirectory(prefix="peerpixel-mlx-") as folder:
             output = Path(folder) / "render.jpg"
+            runner = Path(__file__).with_name("mlx_flux2_runner.py")
             command = [
-                self.executable, "generate", "--model", MODEL,
+                self.python_executable(), str(runner), "--model", MODEL,
                 "--prompt", prompt, "--width", str(width), "--height", str(height),
                 "--steps", str(steps), "--guidance", str(guidance),
                 "--seed", str(int(seed)), "--output", str(output),
             ]
+            if negative_prompt.strip():
+                command.extend(["--negative-prompt", negative_prompt.strip()])
             process = subprocess.Popen(
                 command, text=True, stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE, bufsize=1,

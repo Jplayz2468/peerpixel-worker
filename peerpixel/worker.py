@@ -391,7 +391,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                         pass
                 jpeg = renderer._upscaler.upscale(
                     source, on_phase=reporter.begin, on_progress=upscale_progress)
-                evidence = {"manifestVersion": job.get("manifestVersion", "2026-08-21.1"),
+                evidence = {"manifestVersion": job.get("manifestVersion", "2026-08-23.1"),
                             "attestations": [{"operation": "upscale",
                                 "inputDigest": hashlib.sha256(source).hexdigest(),
                                 "outputDigest": hashlib.sha256(jpeg).hexdigest(),
@@ -403,7 +403,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 evidence = {
                     "enhancedPrompt": job["prompt"],
                     "moderation": {"label": "normal", "nsfwScore": 0.0},
-                    "manifestVersion": job.get("manifestVersion", "2026-08-21.1"),
+                    "manifestVersion": job.get("manifestVersion", "2026-08-23.1"),
                     "recipeId": job.get("recipeId", "photoreal-v1"),
                 }
             session.learn(operation, time.monotonic() - render_started, steps)

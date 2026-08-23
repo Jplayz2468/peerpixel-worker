@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import api, config
 
-MANIFEST_VERSION = "2026-08-21.1"
+MANIFEST_VERSION = "2026-08-23.1"
 
 
 def root() -> Path:

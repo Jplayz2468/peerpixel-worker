@@ -1,6 +1,6 @@
 This worker distribution utilizes the following Apache 2.0 licensed models:
 - FLUX.2 Klein 4B: Licensed under Apache-2.0
-- Qwen3-0.6B: Licensed under Apache-2.0
+- Qwen3-1.7B: Licensed under Apache-2.0
 - Falconsai/nsfw_image_detection: Licensed under Apache-2.0
 - AuraSR-v2: Licensed under Apache-2.0
 

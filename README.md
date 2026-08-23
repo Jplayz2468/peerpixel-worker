@@ -11,7 +11,7 @@ and is relayed straight to their browser. A **master** is the full picture at
 AuraSR-v2 only after somebody chooses the paid 4x download; those bytes go
 straight to that browser and are never saved by the server.
 
-Each enhanced draft runs Qwen3-0.6B independently with its own variation seed.
+Each enhanced draft runs Qwen3-1.7B independently with its own variation seed.
 The selected draft's enhanced prompt is then reused verbatim for its master.
 Seven prompt-only styles use distinct Qwen medium directives; style selection
 never loads or stacks adapter weights. Every

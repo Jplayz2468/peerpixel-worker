@@ -110,7 +110,7 @@ OPERATIONS = {
 #: What may arrive over the wire. `bench` is local, and a job claiming to be one
 #: would be four steps of work submitted for a fifty-step price.
 NETWORK_OPERATIONS = ("draft", "master", "verify")
-MANIFEST_VERSION = "2026-08-21.1"
+MANIFEST_VERSION = "2026-08-23.1"
 STYLE_RECIPES = {
     name: (f"{name}-v2", ()) for name in (
         "photoreal", "anime", "vector", "cinematic", "watercolor",
@@ -659,15 +659,29 @@ class Renderer:
             on_phase("enhancing_prompt")
         if self._enhancer is None:
             self._enhancer = PromptEnhancer()
-        effective = self._enhancer.enhance(
-            job["prompt"], job.get("style", "photoreal"),
-            enabled=job.get("enhance", True), resolved=job.get("enhancedPrompt"),
-            variation=job.get("seed") if job.get("operation") == "draft" else None,
-        )
+        enhancement_options = {
+            "enabled": job.get("enhance", True),
+            "resolved": job.get("enhancedPrompt"),
+            "variation": job.get("seed") if job.get("operation") == "draft" else None,
+        }
+        if hasattr(self._enhancer, "enhance_pair"):
+            pair = self._enhancer.enhance_pair(
+                job["prompt"], job.get("style", "photoreal"),
+                resolved_negative=job.get("negativePrompt"), **enhancement_options,
+            )
+        else:  # Compatibility with a worker finishing a job across an update.
+            pair = {"prompt": self._enhancer.enhance(
+                job["prompt"], job.get("style", "photoreal"), **enhancement_options,
+            ), "negativePrompt": str(job.get("negativePrompt") or "")}
+        effective = pair["prompt"]
+        negative = pair["negativePrompt"]
         # Enhancement is complete before inference. Do not retain Qwen's
         # tensors while the much larger FLUX pipeline and VAE need the memory.
         self._enhancer.unload()
-        resolved = {**job, "prompt": effective}
+        negative_mode = ("none" if not negative else
+                         "inline" if getattr(self, "_mlx_backend", None) is not None
+                         else "native")
+        resolved = {**job, "prompt": effective, "negativePrompt": negative}
         jpeg = self.render(resolved, **render_options)
         if on_phase is not None:
             on_phase("safety_check")
@@ -677,6 +691,8 @@ class Renderer:
         runtime = "peerpixel-worker/0.8.6"
         return jpeg, {
             "enhancedPrompt": effective,
+            "negativePrompt": negative,
+            "negativeConditioning": negative_mode,
             "moderation": moderation,
             "manifestVersion": job.get("manifestVersion", MANIFEST_VERSION),
             "recipeId": STYLE_RECIPES[job.get("style", "photoreal")][0],
@@ -688,9 +704,12 @@ class Renderer:
                     "prompt": job["prompt"], "style": job.get("style", "photoreal"),
                     "enhance": job.get("enhance", True),
                     "variation": job.get("seed") if job.get("operation") == "draft" else None,
-                }), "outputDigest": _digest(effective), "runtimeVersion": runtime},
+                }), "outputDigest": _digest({
+                    "prompt": effective, "negativePrompt": negative,
+                }), "runtimeVersion": runtime},
                 {"operation": "render", "inputDigest": _digest({
                     "prompt": effective, "seed": job.get("seed", 0),
+                    "negativePrompt": negative, "negativeConditioning": negative_mode,
                     "recipe": STYLE_RECIPES[job.get("style", "photoreal")][0],
                     "operation": job.get("operation", "master"),
                 }), "outputDigest": _digest(jpeg), "runtimeVersion": runtime},
@@ -792,7 +811,8 @@ class Renderer:
             jpeg = self._mlx_backend.render(
                 prompt=job["prompt"], width=spec["width"], height=spec["height"],
                 steps=spec["steps"], guidance=spec["guidance"],
-                seed=job.get("seed", 0), on_step=on_step,
+                seed=job.get("seed", 0), negative_prompt=job.get("negativePrompt", ""),
+                on_step=on_step,
             )
             if on_phase is not None:
                 on_phase("decoding")
@@ -805,7 +825,8 @@ class Renderer:
         if hasattr(self.pipe, "encode_prompt"):
             prompt_embeds, _ = self.pipe.encode_prompt(job["prompt"])
             if spec["guidance"] > 1:
-                negative_prompt_embeds, _ = self.pipe.encode_prompt("")
+                negative_prompt_embeds, _ = self.pipe.encode_prompt(
+                    job.get("negativePrompt", ""))
         if spec["name"] != "bench" and ("style" in job or "recipeId" in job):
             if on_phase is not None:
                 on_phase("loading_style")
@@ -829,7 +850,7 @@ class Renderer:
         if on_phase is not None:
             on_phase("rendering")
 
-        image = self.pipe(
+        pipeline_args = dict(
             prompt=None if prompt_embeds is not None else job["prompt"],
             prompt_embeds=prompt_embeds,
             negative_prompt_embeds=negative_prompt_embeds,
@@ -843,7 +864,10 @@ class Renderer:
             generator=self.seed_generator(job.get("seed", 0)),
             latents=latents,
             callback_on_step_end=watch,
-        ).images[0]
+        )
+        if prompt_embeds is None:
+            pipeline_args["negative_prompt"] = job.get("negativePrompt", "")
+        image = self.pipe(**pipeline_args).images[0]
 
         if watch.broken:
             raise _Nonsense()

@@ -46,7 +46,7 @@ class RelayFrameTests(unittest.TestCase):
             "type": "draft_result", "draftId": "draft-1",
             "enhancedPrompt": "richly described scene " * 100,
             "moderation": {"label": "normal", "nsfwScore": 0.00001},
-            "manifestVersion": "2026-08-21.1", "recipeId": "photoreal-v1",
+            "manifestVersion": "2026-08-23.1", "recipeId": "photoreal-v1",
             "attestations": [{
                 "operation": name, "inputDigest": "a" * 64,
                 "outputDigest": "b" * 64, "runtimeVersion": "peerpixel-worker/0.8.5",

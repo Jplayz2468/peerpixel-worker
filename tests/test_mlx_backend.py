@@ -15,10 +15,13 @@ class MLXBackendTests(unittest.TestCase):
     def test_render_preserves_model_contract_and_returns_jpeg(self):
         backend = MLXBackend(executable="/venv/bin/mlxgen")
         seen = []
+        commands = []
 
         class Process:
             def __init__(_self, command, **kwargs):
-                self.assertEqual(command[:2], ["/venv/bin/mlxgen", "generate"])
+                commands.append(command)
+                self.assertEqual(command[0], "/venv/bin/python")
+                self.assertTrue(command[1].endswith("peerpixel/mlx_flux2_runner.py"))
                 self.assertIn("AbstractFramework/flux.2-klein-base-4b-4bit", command)
                 self.assertEqual(command[command.index("--steps") + 1], "50")
                 self.assertEqual(command[command.index("--width") + 1], "512")
@@ -33,10 +36,20 @@ class MLXBackendTests(unittest.TestCase):
         with mock.patch("peerpixel.mlx_backend.subprocess.Popen", Process):
             jpeg = backend.render(
                 prompt="a fox", width=512, height=512, steps=50,
-                guidance=4.0, seed=7, on_step=lambda done, total: seen.append((done, total)),
+                guidance=4.0, seed=7, negative_prompt="watermark, blur",
+                on_step=lambda done, total: seen.append((done, total)),
             )
         self.assertTrue(jpeg.startswith(b"\xff\xd8\xff"))
         self.assertEqual(seen, [(1, 50), (25, 50), (50, 50)])
+        command = commands[0]
+        self.assertEqual(command[command.index("--prompt") + 1], "a fox")
+        self.assertEqual(
+            command[command.index("--negative-prompt") + 1], "watermark, blur")
+
+    def test_mlx_python_is_resolved_from_the_console_script_shebang(self):
+        backend = MLXBackend(executable="/venv/bin/mlxgen")
+        with mock.patch("pathlib.Path.read_text", return_value="#!/venv/bin/python\n"):
+            self.assertEqual(backend.python_executable(), "/venv/bin/python")
 
     def test_model_download_uses_explicit_published_q4_package(self):
         backend = MLXBackend(executable="mlxgen")
