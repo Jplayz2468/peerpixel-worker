@@ -16,9 +16,9 @@ class SafetyClassifier:
         if self.classifier is not None:
             return
         from transformers import pipeline
-        from . import model_cache
+        from . import model_hub
 
-        path = self.model_path or model_cache.ensure_directory("nsfw-image-detection")
+        path = self.model_path or model_hub.ensure("nsfw-image-detection")
         # This network is small enough for CPU inference and must not displace
         # FLUX or its VAE from scarce accelerator/unified memory after render.
         self.classifier = pipeline("image-classification", model=path, device=-1)

@@ -57,8 +57,8 @@ SIZES_BY_VERSION = {
     # bytes that are never sent and then fail the job, so it still has to be
     # kept away from today's work.
     5: {"draft": (256, 6), "master": (1024, 50)},
-    # Styled LoRA recipes, optional Qwen prompt enhancement, a pinned auxiliary
-    # model manifest, and mandatory pre-delivery moderation evidence.
+    # Styled recipes, optional Qwen prompt enhancement, a pinned model-set
+    # contract, and mandatory pre-delivery moderation evidence.
     6: {"draft": (256, 6), "master": (1024, 50)},
     # Faster pixels and measured phase reporting. Finals retain all fifty
     # guided steps; only their spatial contract changes.

@@ -128,9 +128,9 @@ class PromptEnhancer:
         if self.model is not None:
             return
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        from . import model_cache
+        from . import model_hub
 
-        path = self.model_path or model_cache.ensure_directory("qwen3-1.7b")
+        path = self.model_path or model_hub.ensure("qwen3-1.7b")
         self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
         # Keep the small language model on CPU. On Apple silicon, "auto" puts
         # it in unified GPU memory beside FLUX; the resulting pressure makes

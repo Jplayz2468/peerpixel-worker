@@ -45,10 +45,10 @@ libraries, the model, a pairing code, and a speed check, in the only order they
 can happen in. Everything lands inside this folder or in the usual per-user
 caches. Nothing is installed system-wide and nothing needs administrator rights.
 
-The first run downloads the 4B base model from its pinned Hugging Face revision.
-Smaller prompt, safety, and upscale models come from PeerPixel's private, signed Cloudflare R2
-registry only when first needed. Hashes and manifest signatures are checked
-before anything is loaded, and downloads resume after interruption.
+The 4B base model and the smaller prompt, safety, and upscale models all come
+from revision-pinned Hugging Face repositories only when first needed.
+Hugging Face's shared cache resumes interrupted downloads and reuses snapshots
+across runs.
 
 Apple-silicon Macs render through the published MLX 4-bit FLUX.2 Klein Base
 package. Their real benchmark is used for scheduling: current Macs are much

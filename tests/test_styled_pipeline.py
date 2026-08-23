@@ -65,11 +65,21 @@ class StyledPipelineTests(unittest.TestCase):
         enhancer = PromptEnhancer()
         tokenizer = mock.Mock()
         model = mock.Mock()
-        with mock.patch("peerpixel.model_cache.ensure_directory", return_value="/models/qwen") as ensure, \
+        with mock.patch("peerpixel.model_hub.ensure", return_value="/models/qwen") as ensure, \
              mock.patch("transformers.AutoTokenizer.from_pretrained", return_value=tokenizer), \
              mock.patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=model):
             enhancer.warm()
         ensure.assert_called_once_with("qwen3-1.7b")
+
+    def test_safety_model_downloads_from_hugging_face(self):
+        classifier = SafetyClassifier()
+        pipeline = mock.Mock(return_value=object())
+        fake_transformers = types.SimpleNamespace(pipeline=pipeline)
+        with mock.patch("peerpixel.model_hub.ensure", return_value="/hf/safety") as ensure, \
+             mock.patch.dict(sys.modules, {"transformers": fake_transformers}):
+            classifier.warm()
+        ensure.assert_called_once_with("nsfw-image-detection")
+        self.assertEqual(pipeline.call_args.kwargs["model"], "/hf/safety")
 
     def test_positive_prompt_is_hard_limited_to_two_sentences(self):
         parsed = parse_enhancement(
@@ -156,10 +166,10 @@ class StyledPipelineTests(unittest.TestCase):
     def test_safety_threshold_is_strictly_greater_than_point_65(self):
         self.assertEqual(THRESHOLD, 0.65)
 
-    def test_every_style_is_prompt_only_and_never_accesses_model_cache(self):
+    def test_every_style_is_prompt_only_and_never_downloads_an_adapter(self):
         renderer = object.__new__(Renderer)
         renderer.pipe = mock.Mock()
-        with mock.patch("peerpixel.model_cache.ensure") as ensure:
+        with mock.patch("peerpixel.model_hub.ensure") as ensure:
             for style, (recipe_id, adapters) in STYLE_RECIPES.items():
                 self.assertEqual(adapters, ())
                 mode = renderer.apply_style({

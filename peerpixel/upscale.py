@@ -18,9 +18,9 @@ class Upscaler:
         import torch
         from aura_sr import AuraSR
         from safetensors.torch import load_file
-        from . import model_cache
+        from . import model_hub
 
-        path = Path(self.model_path) if self.model_path else model_cache.ensure_directory("aurasr-v2")
+        path = Path(self.model_path) if self.model_path else Path(model_hub.ensure("aurasr-v2"))
         device = "cuda" if torch.cuda.is_available() else (
             "mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cpu"
         )

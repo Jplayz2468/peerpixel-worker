@@ -13,7 +13,6 @@ dependencies = [
   "psutil>=6",
   "huggingface-hub>=0.30",
   "websockets>=13",
-  "zstandard>=0.23",
   "aura-sr>=0.0.4",
   "bitsandbytes>=0.45; platform_system != 'Darwin'",
   "mlx-gen>=0.30.1; platform_system == 'Darwin' and platform_machine == 'arm64'",
