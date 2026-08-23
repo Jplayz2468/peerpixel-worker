@@ -10,8 +10,13 @@ CONCEPT_TOKENS = 80
 
 COMMON_NEGATIVE = (
     "blurry, low detail, malformed anatomy, distorted hands, extra limbs, "
-    "duplicate subjects, unintended text, letters, logos, signatures, "
+    "duplicate subjects, logos, signatures, "
     "watermarks, borders, compression artifacts"
+)
+NO_TEXT_NEGATIVE = "unintended text, letters"
+REQUESTED_TEXT_NEGATIVE = (
+    "misspelled requested text, gibberish text, duplicated text, "
+    "missing text, cropped typography"
 )
 STYLE_NEGATIVES = {
     "photoreal": "plastic skin, waxy faces, illustration, anime, CGI, oversmoothing",
@@ -31,6 +36,7 @@ Behavior:
 - For an underspecified prompt, silently decide at least four concrete non-style facts before writing: WHO or WHAT specifically, doing WHAT, WHERE, WHEN or under what conditions, and which prop or visual clue implies a story. Generic adjectives and medium markers do not count. Never copy a stock scene; invent decisions that fit this particular subject and variation seed.
 - If the user's prompt is already detailed: Retain all core subjects, colors, and actions, refining flow and adding subtle medium markers.
 - Preserve explicit constraints and subject count. Do not add extra people, text, logos, brands, or named characters unless requested, and never contradict specified traits. If a draft variation seed is provided, use it to choose a genuinely distinct concept, not as visible text in the output.
+- When visible text is explicitly requested on a sign, poster, cover, label, screen, garment, title, caption, or similar surface: reproduce its exact spelling and capitalization in double quotes. Describe the physical surface plus typography, placement, material, contrast, and legibility so FLUX treats the words as part of the composition. Never paraphrase, translate, extend, or invent copy. Spoken dialogue is not visible image text unless the user requests a speech bubble, subtitle, or caption.
 - Develop the scene concept before applying the one required style supplied with the request. Never borrow characteristics from a different style."""
 
 STYLES = ("photoreal", "anime", "vector", "cinematic", "watercolor",
@@ -46,10 +52,43 @@ STYLE_DIRECTIVES = {
 }
 
 
-def negative_template(style: str) -> str:
+_TEXT_SURFACE = (
+    r"(?:sign|poster|billboard|marquee|label|caption|subtitle|speech bubble|"
+    r"book cover|album cover|cover|title|headline|menu|screen|shirt|t-shirt|garment)"
+)
+_TEXT_VERB = r"(?:reading|reads|saying|says|bearing|titled|with\s+(?:the\s+)?(?:text|words))"
+
+
+def requested_visible_text(prompt: str) -> tuple[str, ...]:
+    """Extract copy that must survive enhancement byte-for-byte.
+
+    Deliberately require a visual text surface, so quoted dialogue does not
+    accidentally become typography. Quoted copy is preferred; an all-caps
+    unquoted phrase is accepted because it is unambiguous in natural prompts.
+    """
+    source = str(prompt or "")
+    found = []
+    quoted = re.compile(
+        rf"{_TEXT_SURFACE}\b[^.!?\n]{{0,80}}?\b{_TEXT_VERB}\s*[\"“']([^\"”']+)[\"”']",
+        re.IGNORECASE,
+    )
+    capitals = re.compile(
+        rf"{_TEXT_SURFACE}\b[^.!?\n]{{0,80}}?\b{_TEXT_VERB}\s+"
+        r"([A-Z0-9][A-Z0-9 '&-]{1,60}?)(?=$|[,.;!?])",
+    )
+    for pattern in (quoted, capitals):
+        for match in pattern.finditer(source):
+            value = re.sub(r"\s+", " ", match.group(1)).strip()
+            if value and value not in found:
+                found.append(value)
+    return tuple(found)
+
+
+def negative_template(style: str, visible_text: tuple[str, ...] = ()) -> str:
     if style not in STYLES:
         raise ValueError(f"unknown_style:{style}")
-    return f"{COMMON_NEGATIVE}, {STYLE_NEGATIVES[style]}"
+    text_rules = REQUESTED_TEXT_NEGATIVE if visible_text else NO_TEXT_NEGATIVE
+    return f"{COMMON_NEGATIVE}, {text_rules}, {STYLE_NEGATIVES[style]}"
 
 
 def sampling_seed(prompt: str, style: str, variation=None) -> int:
@@ -58,7 +97,8 @@ def sampling_seed(prompt: str, style: str, variation=None) -> int:
 
 
 def parse_enhancement(text: str, *, fallback_prompt: str,
-                      fallback_negative: str) -> dict[str, str]:
+                      fallback_negative: str,
+                      visible_text: tuple[str, ...] = ()) -> dict[str, str]:
     cleaned = str(text or "").strip().strip("`").strip()
     try:
         value = json.loads(cleaned)
@@ -70,12 +110,31 @@ def parse_enhancement(text: str, *, fallback_prompt: str,
     else:
         prompt, negative = cleaned.strip('"'), ""
     prompt = prompt or fallback_prompt.strip()
+    for copy in visible_text:
+        for left, right in (("'", "'"), ("‘", "’"), ("“", "”")):
+            prompt = prompt.replace(f"{left}{copy}{right}", f'"{copy}"')
+        prompt = re.sub(
+            rf'(?<!["\']){re.escape(copy)}(?!["\'])', f'"{copy}"', prompt,
+        )
+    missing = [copy for copy in visible_text if copy not in prompt]
+    if missing:
+        exact = ", ".join(f'"{copy}"' for copy in missing)
+        prompt = prompt.rstrip().rstrip(".!?") + (
+            f', featuring exact visible text {exact} with clear, correctly spelled typography.'
+        )
     # Model instructions are not a dependable output boundary. Keep the first
     # two complete sentences so an over-creative response cannot bloat every
     # diffusion request; preserve a trailing fragment when there are fewer.
     ends = list(re.finditer(r"[.!?](?=\s|$)", prompt))
     if len(ends) >= 2:
         prompt = prompt[:ends[1].end()].strip()
+    if visible_text:
+        parts = [part.strip() for part in negative.split(",") if part.strip()]
+        parts = [part for part in parts if part.lower() not in {"unintended text", "letters"}]
+        for rule in REQUESTED_TEXT_NEGATIVE.split(", "):
+            if rule not in parts:
+                parts.append(rule)
+        negative = ", ".join(parts)
     return {
         "prompt": prompt,
         "negativePrompt": negative or fallback_negative.strip(),
@@ -102,13 +161,22 @@ def concept_messages(prompt: str, variation=None) -> list[dict[str, str]]:
 def enhancement_messages(prompt: str, style: str, variation=None,
                          concept: str = "") -> list[dict[str, str]]:
     variation_line = "" if variation is None else f"\nDraft variation seed: {variation}"
-    template = negative_template(style)
+    visible_text = requested_visible_text(prompt)
+    template = negative_template(style, visible_text)
+    text_instruction = ""
+    if visible_text:
+        copies = ", ".join(f'"{copy}"' for copy in visible_text)
+        text_instruction = (
+            f"Exact visible text requested: {copies}\n"
+            "Preserve that copy exactly and describe its typography, placement, material, and legibility.\n"
+        )
     return [
         {"role": "system", "content": SYSTEM_INSTRUCTION},
         {"role": "user", "content": (
             f"Chosen style: {style.upper()}{variation_line}\nUser prompt: {prompt.strip()}\n"
             + (f"Creative scene concept: {concept.strip()}\n"
                "Use every compatible concrete fact from this concept.\n" if concept else "") +
+            text_instruction +
             f"Required style directive: {STYLE_DIRECTIVES[style]}\n"
             "Apply this chosen style and no other style.\n"
             f"Negative prompt template: {template}\n"
@@ -164,6 +232,7 @@ class PromptEnhancer:
         if style not in STYLES:
             raise ValueError(f"unknown_style:{style}")
         self.warm()
+        visible_text = requested_visible_text(prompt)
         concept = ""
         if needs_concept(prompt):
             concept = self._generate_text(
@@ -179,7 +248,8 @@ class PromptEnhancer:
             raise RuntimeError("prompt_enhancement_empty")
         return parse_enhancement(
             generated_text, fallback_prompt=prompt,
-            fallback_negative=negative_template(style),
+            fallback_negative=negative_template(style, visible_text),
+            visible_text=visible_text,
         )
 
     def enhance(self, prompt: str, style: str, *, enabled=True, resolved=None,

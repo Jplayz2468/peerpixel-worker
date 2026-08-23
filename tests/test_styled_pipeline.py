@@ -7,7 +7,7 @@ from unittest import mock
 from peerpixel.prompt_enhancer import (
     PromptEnhancer, SYSTEM_INSTRUCTION, enhancement_messages,
     negative_template, parse_enhancement, sampling_seed,
-    concept_messages, needs_concept,
+    concept_messages, needs_concept, requested_visible_text,
 )
 from peerpixel.safety import SafetyClassifier, THRESHOLD
 from peerpixel.render import Renderer, STYLE_RECIPES
@@ -133,6 +133,50 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertIn("plastic skin", photoreal)
         self.assertIn("gradients", vector)
         self.assertNotEqual(photoreal, vector)
+
+    def test_requested_image_text_is_extracted_but_spoken_dialogue_is_not(self):
+        self.assertEqual(
+            requested_visible_text('a rainy diner with a neon sign reading "OPEN LATE"'),
+            ("OPEN LATE",),
+        )
+        self.assertEqual(
+            requested_visible_text("a bold poster with the words NO FUTURE"),
+            ("NO FUTURE",),
+        )
+        self.assertEqual(requested_visible_text('a man saying "hello" to his friend'), ())
+
+    def test_text_requests_change_qwens_instruction_and_negative_template(self):
+        content = enhancement_messages(
+            'a book cover titled "THE LONG WAY HOME"', "illustration",
+        )[1]["content"]
+        self.assertIn('Exact visible text requested: "THE LONG WAY HOME"', content)
+        self.assertIn("typography, placement, material, and legibility", content)
+        self.assertNotIn("unintended text, letters", content)
+        self.assertIn("misspelled requested text", content)
+
+    def test_postprocessing_restores_exact_copy_if_qwen_drops_or_rewrites_it(self):
+        parsed = parse_enhancement(
+            '{"prompt":"A glowing neighborhood cinema marquee.",'
+            '"negative_prompt":"blurry, unintended text, letters, watermark"}',
+            fallback_prompt='a marquee reading "MOON PALACE"',
+            fallback_negative="blur",
+            visible_text=("MOON PALACE",),
+        )
+        self.assertIn('exact visible text "MOON PALACE"', parsed["prompt"])
+        self.assertNotIn("unintended text", parsed["negativePrompt"])
+        self.assertNotIn("letters", parsed["negativePrompt"])
+        self.assertIn("misspelled requested text", parsed["negativePrompt"])
+
+    def test_requested_copy_is_normalized_to_double_quotes(self):
+        parsed = parse_enhancement(
+            '{"prompt":"A neon sign reading \'OPEN LATE\' above the diner.",'
+            '"negative_prompt":"blur"}',
+            fallback_prompt='a sign reading "OPEN LATE"',
+            fallback_negative="blur",
+            visible_text=("OPEN LATE",),
+        )
+        self.assertIn('reading "OPEN LATE"', parsed["prompt"])
+        self.assertNotIn("'OPEN LATE'", parsed["prompt"])
 
     def test_creative_sampling_is_reproducible_but_varies_per_draft(self):
         first = sampling_seed("a man", "cinematic", 101)
