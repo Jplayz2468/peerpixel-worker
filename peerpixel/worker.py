@@ -25,7 +25,7 @@ from .system_status import SystemStatus
 #:
 #: Protocol 11 is direct-only: public work is a native 1024px master, internal
 #: fraud work is an explicit 128px probe, and only probes and upscales return
-#: bytes over the socket. Older installs speak the removed candidate contract,
+#: bytes over the socket. Older installs speak the removed preview contract,
 #: so the server keeps them connected but ineligible until they update.
 PROTOCOL_VERSION = 11
 

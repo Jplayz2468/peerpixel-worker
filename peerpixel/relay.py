@@ -7,7 +7,7 @@ masters use the authoritative HTTP result route.
 
 This is the exact same format as `public/relay-frame.mjs` on the server side.
 If one end changes, both change: the header is routing information, and a
-mismatch would mean bytes handed to the wrong candidate rather than a clean
+mismatch would mean bytes handed to the wrong job rather than a clean
 error. Standard library only, like the rest of this package.
 """
 from __future__ import annotations

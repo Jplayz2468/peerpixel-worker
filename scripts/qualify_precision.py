@@ -51,17 +51,17 @@ def render_one(renderer, operation: str, style: str, output: Path):
     jpeg, evidence = renderer.generate_job(job)
     elapsed = round((time.perf_counter() - started) * 1000)
     output.write_bytes(jpeg)
-    expected = (128, 128) if operation == "draft" else (512, 512)
+    expected = (128, 128) if operation == "probe" else (1024, 1024)
     valid = valid_image(jpeg, expected) and "moderation" in evidence
     return elapsed, valid, evidence
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--quick", action="store_true", help="drafts only")
+    parser.add_argument("--quick", action="store_true", help="internal probes only")
     parser.add_argument("--style", choices=tuple(PROMPTS), action="append",
                         help="render only this style; may be repeated")
-    parser.add_argument("--baseline-draft-ms", type=int, default=0)
+    parser.add_argument("--baseline-probe-ms", type=int, default=0)
     parser.add_argument("--baseline-master-ms", type=int, default=0)
     parser.add_argument("--approve-quality", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("qualification-output"))
@@ -84,15 +84,15 @@ def main() -> int:
     except Exception:
         pass
 
-    draft_times = []
+    probe_times = []
     valid = True
     evidence = []
     styles = args.style or list(PROMPTS)
     for style in styles:
         elapsed, good, proof = render_one(
-            renderer, "draft", style,
-            args.output / f"{renderer._precision_mode}-draft-{style}.jpg")
-        draft_times.append(elapsed)
+            renderer, "probe", style,
+            args.output / f"{renderer._precision_mode}-probe-{style}.jpg")
+        probe_times.append(elapsed)
         valid = valid and good
         evidence.append(proof)
 
@@ -111,26 +111,26 @@ def main() -> int:
     except Exception:
         peak = 0
 
-    draft_ms = round(sum(draft_times) / len(draft_times))
-    draft_gate = qualify_candidate(
-        args.baseline_draft_ms, draft_ms, valid=valid,
-        quality_passed=args.approve_quality) if args.baseline_draft_ms else None
+    probe_ms = round(sum(probe_times) / len(probe_times))
+    probe_gate = qualify_candidate(
+        args.baseline_probe_ms, probe_ms, valid=valid,
+        quality_passed=args.approve_quality) if args.baseline_probe_ms else None
     master_gate = qualify_candidate(
         args.baseline_master_ms, master_ms, valid=valid,
         quality_passed=args.approve_quality) if args.baseline_master_ms and master_ms else None
-    qualified = bool(draft_gate and draft_gate["qualified"] and
+    qualified = bool(probe_gate and probe_gate["qualified"] and
                      (args.quick or (master_gate and master_gate["qualified"])))
     result = {
         "precision": renderer._precision_mode,
         "memoryMode": renderer._memory_mode,
         "styleMode": "prompt_only",
-        "draftMs": draft_ms,
-        "draftSamplesMs": draft_times,
+        "probeMs": probe_ms,
+        "probeSamplesMs": probe_times,
         "masterMs": master_ms or None,
         "peakVram": peak,
         "valid": valid,
         "qualityPassed": bool(args.approve_quality),
-        "draftGate": draft_gate,
+        "probeGate": probe_gate,
         "masterGate": master_gate,
         "qualified": qualified,
         "output": str(args.output.resolve()),
