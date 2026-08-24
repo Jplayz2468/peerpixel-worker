@@ -84,10 +84,10 @@ GUIDANCE = 4.0
 GUIDANCE_RANGE = (1.5, 12.0)
 OPERATIONS = {
     # A preview exists to answer one question -- is this the composition I
-    # wanted -- and it is asked several times before anything is chosen, so
-    # what matters about it is that it is cheap. Six steps at 128px is enough
-    # for this checkpoint to settle a composition.
-    "draft": {"width": 128, "height": 128, "steps": 6, "guidance": GUIDANCE},
+    # wanted -- and it is asked several times before anything is chosen.
+    # Temporarily use the full denoising schedule to compare convergence while
+    # preserving the cheap 128px canvas.
+    "draft": {"width": 128, "height": 128, "steps": 50, "guidance": GUIDANCE},
     # The master retains the full fifty guided steps at 512px.
     "master": {"width": 512, "height": 512, "steps": 50, "guidance": GUIDANCE},
     # A check is a master rendered a second time on a machine the operator
@@ -696,7 +696,7 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.8.9"
+        runtime = "peerpixel-worker/0.9.0"
         return jpeg, {
             "enhancedPrompt": effective,
             "negativePrompt": negative,

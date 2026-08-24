@@ -34,7 +34,7 @@ from .system_status import SystemStatus
 #: The server therefore
 #: gives work only to the current version, and an old install sits connected,
 #: idle and unpaid until it is updated.
-PROTOCOL_VERSION = 8
+PROTOCOL_VERSION = 9
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2
@@ -409,7 +409,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                             "attestations": [{"operation": "upscale",
                                 "inputDigest": hashlib.sha256(source).hexdigest(),
                                 "outputDigest": hashlib.sha256(jpeg).hexdigest(),
-                                "runtimeVersion": "peerpixel-worker/0.8.9"}]}
+                                "runtimeVersion": "peerpixel-worker/0.9.0"}]}
             elif hasattr(renderer, "generate_job"):
                 jpeg, evidence = renderer.generate_job(job, **render_options)
             else:  # small test doubles and third-party renderer integrations

@@ -66,6 +66,9 @@ SIZES_BY_VERSION = {
     # Auto-style requests are resolved by Qwen and returned as a concrete
     # style/recipe pair in the generation evidence.
     8: {"draft": (128, 6), "master": (512, 50)},
+    # Temporary quality experiment: drafts retain their tiny canvas but use
+    # the same full denoising schedule as finals.
+    9: {"draft": (128, 50), "master": (512, 50)},
 }
 
 

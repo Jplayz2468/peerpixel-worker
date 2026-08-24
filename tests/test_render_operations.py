@@ -75,7 +75,7 @@ class OperationTableTests(unittest.TestCase):
     def test_the_two_operations_have_the_sizes_the_network_prices(self):
         self.assertEqual(
             render.operation_of({"operation": "draft"}),
-            {"name": "draft", "width": 128, "height": 128, "steps": 6, "guidance": 4.0})
+            {"name": "draft", "width": 128, "height": 128, "steps": 50, "guidance": 4.0})
         self.assertEqual(
             render.operation_of({"operation": "master"}),
             {"name": "master", "width": 512, "height": 512, "steps": 50, "guidance": 4.0})
@@ -102,7 +102,7 @@ class OperationTableTests(unittest.TestCase):
 
 
 class DraftTests(unittest.TestCase):
-    def test_a_preview_is_128px_at_six_steps_from_the_prompt_alone(self):
+    def test_a_preview_is_128px_at_fifty_steps_from_the_prompt_alone(self):
         pipe = FakePipeline()
         jpeg = renderer_with(pipe).render(
             {"prompt": "a quiet harbour", "seed": 7, "operation": "draft"})
@@ -110,7 +110,7 @@ class DraftTests(unittest.TestCase):
         (call,) = pipe.calls
         self.assertEqual(call["width"], 128)
         self.assertEqual(call["height"], 128)
-        self.assertEqual(call["num_inference_steps"], 6)
+        self.assertEqual(call["num_inference_steps"], 50)
         self.assertEqual(call["guidance_scale"], 4.0,
                          "a draft has to preview the master, so it is guided the same way")
         self.assertNotIn("image", call, "a draft has nothing to be conditioned on")
