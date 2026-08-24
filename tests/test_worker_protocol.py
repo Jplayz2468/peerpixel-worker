@@ -130,6 +130,15 @@ class DraftSettlementTests(unittest.TestCase):
         self.assertEqual(worker.await_settlement(link, "d1", timeout=1, clock=ticking(0.4)), 0)
 
 
+class CompletedResultNotificationTests(unittest.TestCase):
+    def test_a_closed_socket_after_http_acceptance_does_not_fail_the_render(self):
+        class ClosedLink:
+            def send(self, _data):
+                raise RuntimeError("no close frame received or sent")
+
+        self.assertFalse(worker.notify_finished(ClosedLink(), "master1"))
+
+
 class ResultSizeTests(unittest.TestCase):
     def test_the_worker_knows_the_same_ceiling_the_dispatcher_enforces(self):
         self.assertEqual(relay.MAX_RESULT_BYTES, 256 * 1024)

@@ -94,6 +94,20 @@ def await_settlement(link, job_id: str, *, timeout: float = 30.0, clock=time.mon
     return 0
 
 
+def notify_finished(link, job_id: str) -> bool:
+    """Best-effort socket hint after the authoritative result was accepted.
+
+    Permanent results settle over HTTP. A deployment can close the websocket
+    in the few milliseconds between that commit and this hint; that must not
+    turn a successfully stored image into a locally reported failure.
+    """
+    try:
+        link.send(json.dumps({"type": "finished", "jobId": job_id}))
+        return True
+    except Exception:  # noqa: BLE001 - reconnect will discover the free slot
+        return False
+
+
 #: How much a new timing counts against everything before it. Low, because a
 #: job that happened to wait on a cold cache should not convince the next one
 #: that this machine is slow.
@@ -395,7 +409,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                             "attestations": [{"operation": "upscale",
                                 "inputDigest": hashlib.sha256(source).hexdigest(),
                                 "outputDigest": hashlib.sha256(jpeg).hexdigest(),
-                                "runtimeVersion": "peerpixel-worker/0.8.7"}]}
+                                "runtimeVersion": "peerpixel-worker/0.8.8"}]}
             elif hasattr(renderer, "generate_job"):
                 jpeg, evidence = renderer.generate_job(job, **render_options)
             else:  # small test doubles and third-party renderer integrations
@@ -417,13 +431,13 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
 
             if operation == "auxiliary_verify":
                 api.submit_auxiliary(job["id"], observed_digest)
-                link.send(json.dumps({"type": "finished", "jobId": job["id"]}))
+                notify_finished(link, job["id"])
             elif operation == "verify":
                 subject = api.verify_asset(job["id"], "subject")
                 measurements = compare.compare(subject, jpeg)
                 measurements["image"] = base64.b64encode(jpeg).decode()
                 api.submit_verification(job["id"], measurements)
-                link.send(json.dumps({"type": "finished", "jobId": job["id"]}))
+                notify_finished(link, job["id"])
             elif operation == "upscale":
                 link.send(relay.encode({
                     "type": "upscale_result", "jobId": job["id"], **evidence,
@@ -445,7 +459,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                     "type": "master_result", "jobId": job["id"], **evidence,
                 }, jpeg))
                 earned = result.get("earnedCredits", 0) or 0
-                link.send(json.dumps({"type": "finished", "jobId": job["id"]}))
+                notify_finished(link, job["id"])
             reporter.begin("complete")
             bar.finish()
     except Exception as error:  # noqa: BLE001 - one bad job must not end the run
