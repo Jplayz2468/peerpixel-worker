@@ -6,10 +6,12 @@ that unpacks somebody else's zip onto this disk.
 from __future__ import annotations
 
 import re
+import subprocess
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from peerpixel import updater
 
@@ -132,6 +134,42 @@ class SwapTests(unittest.TestCase):
             self.assertEqual((target / "peerpixel" / "render.py").read_text(), "new")
             self.assertEqual((target / ".venv" / "torch").read_text(), "expensive")
             self.assertFalse((target / ".venv" / "junk").exists())
+
+
+class CloneUpdateTests(unittest.TestCase):
+    def test_a_clone_on_an_old_feature_branch_fast_forwards_to_origin_main(self):
+        class Bar:
+            def begin(self, *_args, **_kwargs):
+                pass
+
+        def git(*args, cwd):
+            subprocess.run(["git", *args], cwd=cwd, check=True,
+                           capture_output=True, text=True)
+
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            remote, source, clone = root / "remote.git", root / "source", root / "clone"
+            git("init", "--bare", "--initial-branch=main", str(remote), cwd=root)
+            git("init", "--initial-branch=main", str(source), cwd=root)
+            git("config", "user.email", "test@peerpixel.invalid", cwd=source)
+            git("config", "user.name", "PeerPixel Test", cwd=source)
+            (source / "pyproject.toml").write_text('version = "0.8.7"\n')
+            git("add", "pyproject.toml", cwd=source)
+            git("commit", "-m", "old", cwd=source)
+            git("remote", "add", "origin", str(remote), cwd=source)
+            git("push", "-u", "origin", "main", cwd=source)
+            git("branch", "codex/old", cwd=source)
+            git("push", "-u", "origin", "codex/old", cwd=source)
+            git("clone", "--branch", "codex/old", str(remote), str(clone), cwd=root)
+            (source / "pyproject.toml").write_text('version = "0.8.8"\n')
+            git("commit", "-am", "new", cwd=source)
+            git("push", "origin", "main", cwd=source)
+
+            with patch.object(updater, "ROOT", clone), patch.object(updater, "_sync"):
+                result = updater._git_update(Bar(), "0.8.7")
+
+            self.assertTrue(result["updated"])
+            self.assertEqual((clone / "pyproject.toml").read_text(), 'version = "0.8.8"\n')
 
 
 if __name__ == "__main__":

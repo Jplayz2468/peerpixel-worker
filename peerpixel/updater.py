@@ -229,7 +229,14 @@ def _git_update(bar, current: str) -> dict:
     quietly reset their work would be worse than no update at all.
     """
     bar.begin("fetch", detail="git")
-    out = subprocess.run(["git", "pull", "--ff-only"], cwd=str(ROOT),
+    before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ROOT),
+                            capture_output=True, text=True)
+    fetched = subprocess.run(["git", "fetch", "origin", "main"], cwd=str(ROOT),
+                             capture_output=True, text=True)
+    if fetched.returncode != 0:
+        said = (fetched.stderr or fetched.stdout).strip().splitlines()
+        raise RuntimeError(said[-1] if said else "git fetch origin main failed")
+    out = subprocess.run(["git", "merge", "--ff-only", "origin/main"], cwd=str(ROOT),
                          capture_output=True, text=True)
     if out.returncode != 0:
         said = (out.stderr or out.stdout).strip().splitlines()
@@ -237,7 +244,9 @@ def _git_update(bar, current: str) -> dict:
     bar.begin("unpack")
     bar.begin("install")
     _sync()
-    return {"updated": "Already up to date" not in out.stdout, "version": installed()}
+    after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ROOT),
+                           capture_output=True, text=True)
+    return {"updated": before.stdout.strip() != after.stdout.strip(), "version": installed()}
 
 
 def _sync() -> None:
