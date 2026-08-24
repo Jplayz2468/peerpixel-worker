@@ -51,7 +51,7 @@ class StyledPipelineTests(unittest.TestCase):
             "prompt": "fox", "style": "anime", "operation": "master", "seed": 7,
             "recipeId": "anime-v1", "manifestVersion": "2026-08-23.1",
         })
-        self.assertEqual(events, ["enhance", "release_prompt_model", "render", "moderate"])
+        self.assertEqual(events, ["render", "moderate"])
 
     def test_prompt_enhancement_has_no_candidate_variation_instruction(self):
         for callable_ in (
@@ -308,7 +308,7 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertTrue(result["prompt"].startswith("A detective crosses a rain-bright street,"))
         self.assertIn("40mm anamorphic lens", result["prompt"])
 
-    def test_renderer_uses_qwens_auto_style_but_never_overrides_an_explicit_style(self):
+    def test_renderer_uses_the_already_resolved_style_without_running_qwen(self):
         class Enhancer:
             def enhance_pair(self, _prompt, style, **_kwargs):
                 return {"prompt": "polished", "negativePrompt": "blur",
@@ -324,17 +324,18 @@ class StyledPipelineTests(unittest.TestCase):
         renderer._style_mode = "prompt_only"
         seen = []
         renderer.render = lambda job, **_kwargs: seen.append(job) or b"jpeg"
-        _, auto = renderer.generate_job({
-            "prompt": "detective", "style": "auto", "operation": "master", "seed": 7,
-            "recipeId": "auto-v1", "manifestVersion": "2026-08-23.1",
+        _, cinematic = renderer.generate_job({
+            "prompt": "polished", "negativePrompt": "blur", "style": "cinematic", "operation": "master", "seed": 7,
+            "recipeId": "cinematic-v1", "manifestVersion": "2026-08-23.1",
         })
         _, explicit = renderer.generate_job({
             "prompt": "detective", "style": "anime", "operation": "master", "seed": 8,
             "recipeId": "anime-v1", "manifestVersion": "2026-08-23.1",
         })
-        self.assertEqual((seen[0]["style"], auto["style"], auto["recipeId"]),
+        self.assertEqual((seen[0]["style"], cinematic["style"], cinematic["recipeId"]),
                          ("cinematic", "cinematic", STYLE_RECIPES["cinematic"][0]))
         self.assertEqual((seen[1]["style"], explicit["style"]), ("anime", "anime"))
+        self.assertEqual(seen[0]["prompt"], "polished")
 
     def test_safety_threshold_is_strictly_greater_than_point_65(self):
         self.assertEqual(THRESHOLD, 0.65)
@@ -368,7 +369,7 @@ class StyledPipelineTests(unittest.TestCase):
         renderer._style_mode = "prompt_only"
         renderer.render = lambda *_args, **_kwargs: b"jpeg"
         _, evidence = renderer.generate_job({
-            "prompt": "fox", "style": "anime", "operation": "master", "seed": 7,
+            "prompt": "fox", "negativePrompt": "watermark, blur", "style": "anime", "operation": "master", "seed": 7,
             "recipeId": "anime-v1", "manifestVersion": "2026-08-23.1",
         })
         self.assertEqual({key: evidence[key] for key in

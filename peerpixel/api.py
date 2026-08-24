@@ -64,6 +64,10 @@ def submit_result(job_id: str, frame: bytes) -> dict:
     return _call(f"/api/device/job/{job_id}/result", method="POST", raw=frame, timeout=300)
 
 
+def submit_prompt_result(job_id: str, result: dict) -> dict:
+    return _call(f"/api/device/job/{job_id}/result", method="POST", payload=result, timeout=300)
+
+
 def verify_asset(check_id: str, which: str) -> bytes:
     """One of the two pictures a check compares. Raw bytes, not JSON."""
     import urllib.request

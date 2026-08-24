@@ -176,7 +176,7 @@ def status_line(session: Session, state: str, hardware: SystemStatus) -> str:
     return f"{hardware.line()} · {session.line(state)}"
 
 
-def run(renderer, once: bool = False) -> int:
+def run(renderer, once: bool = False, prompt_only: bool = False) -> int:
     saved = config.read()
     config.write(stopAfterJob=False)
     if not saved.get("token"):
@@ -197,14 +197,16 @@ def run(renderer, once: bool = False) -> int:
     start = plans.tracker("start")
     with console.Live(start, heading="Starting the worker", footer=hardware.line):
         start.begin("load")
-        renderer.warm()
+        if not prompt_only:
+            renderer.warm()
         start.note(renderer.accelerator)
         start.begin("connect")
         start.finish()
     plans.remember(start)
 
     url = (config.API.replace("http", "ws", 1)
-           + f"/api/device/connect?protocol={PROTOCOL_VERSION}")
+           + f"/api/device/connect?protocol={PROTOCOL_VERSION}"
+           + f"&capabilities={'prompt' if prompt_only else 'image,prompt'}")
     headers = {"authorization": f"Bearer {saved['token']}", "user-agent": api.USER_AGENT}
     backoff = RECONNECT_MIN
     link_ref: list = [None, ""]
@@ -334,7 +336,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
     try:
         with console.Live(bar, heading=heading,
                           footer=hardware.line if hardware else None):
-            if getattr(renderer, "pipe", None) is None:
+            if operation != "prompt" and getattr(renderer, "pipe", None) is None:
                 reporter.begin("loading_flux")
                 bar.begin("load")
                 renderer.warm()
@@ -351,7 +353,13 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 "on_phase": reporter.begin,
             }
             observed_digest = None
-            if operation == "auxiliary_verify":
+            if operation == "prompt":
+                from .prompt_enhancer import PromptEnhancer
+                enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer()
+                renderer._enhancer = enhancer
+                pair = enhancer.enhance_pair(job["prompt"], job.get("style", "auto"))
+                jpeg, evidence = b"", pair
+            elif operation == "auxiliary_verify":
                 from .render import _digest
                 auxiliary = job.get("auxiliaryOperation")
                 if auxiliary == "prompt":
@@ -414,7 +422,11 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
             session.learn(operation, time.monotonic() - render_started, steps)
             reporter.begin("delivering")
             bar.begin("deliver")
-            if operation == "auxiliary_verify":
+            if operation == "prompt":
+                result = api.submit_prompt_result(job["id"], evidence)
+                earned = result.get("earnedCredits", 0) or 0
+                notify_finished(link, job["id"])
+            elif operation == "auxiliary_verify":
                 api.submit_auxiliary(job["id"], observed_digest)
                 notify_finished(link, job["id"])
             elif operation == "verify":

@@ -304,13 +304,30 @@ def cmd_start(argv: list[str]) -> None:
     """Set up if needed, then render until stopped."""
     if "--no-update" not in argv:
         self_update()
-    if not onboard(interactive=sys.stdin.isatty() and "--yes" not in argv):
+    prompt_only = "--prompt-only" in argv
+    if prompt_only:
+        if not config.read().get("token") and not pair_interactively(sys.stdin.isatty()):
+            raise SystemExit(1)
+    elif not onboard(interactive=sys.stdin.isatty() and "--yes" not in argv):
         raise SystemExit(1)
     need_libraries()
-    from .render import Renderer
     from .worker import run as run_worker
-
-    run_worker(Renderer(), once="--once" in argv)
+    if prompt_only:
+        class PromptOnlyRenderer:
+            accelerator = "CPU prompt enhancer"
+            pipe = None
+            _device = "cpu"
+            _enhancer = None
+            def warm(self): pass
+            def unload(self):
+                if self._enhancer is not None:
+                    self._enhancer.unload()
+                    self._enhancer = None
+        renderer = PromptOnlyRenderer()
+    else:
+        from .render import Renderer
+        renderer = Renderer()
+    run_worker(renderer, once="--once" in argv, prompt_only=prompt_only)
 
 
 def cmd_setup(argv: list[str]) -> None:

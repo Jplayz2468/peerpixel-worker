@@ -600,39 +600,18 @@ class Renderer:
         return "prompt_only"
 
     def generate_job(self, job: dict, **render_options):
-        """Polish, style, render, then classify locally in that exact order."""
-        from .prompt_enhancer import PromptEnhancer
+        """Render an already finalized prompt, then classify it locally."""
         from .safety import SafetyClassifier
 
         on_phase = render_options.get("on_phase")
-        if on_phase is not None:
-            on_phase("enhancing_prompt")
-        if self._enhancer is None:
-            self._enhancer = PromptEnhancer()
-        enhancement_options = {
-            "enabled": job.get("enhance", True),
-            "resolved": job.get("enhancedPrompt"),
-        }
-        if hasattr(self._enhancer, "enhance_pair"):
-            pair = self._enhancer.enhance_pair(
-                job["prompt"], job.get("style", "photoreal"),
-                resolved_negative=job.get("negativePrompt"), **enhancement_options,
-            )
-        else:  # Compatibility with a worker finishing a job across an update.
-            pair = {"prompt": self._enhancer.enhance(
-                job["prompt"], job.get("style", "photoreal"), **enhancement_options,
-            ), "negativePrompt": str(job.get("negativePrompt") or "")}
-        effective = pair["prompt"]
-        negative = pair["negativePrompt"]
+        effective = str(job.get("prompt") or "").strip()
+        negative = str(job.get("negativePrompt") or "").strip()
         requested_style = job.get("style", "photoreal")
-        chosen_style = pair.get("style", requested_style)
-        if requested_style != "auto":
-            chosen_style = requested_style
+        chosen_style = requested_style
         if chosen_style not in STYLE_RECIPES:
             raise ValueError(f"unknown_style:{chosen_style}")
         # Enhancement is complete before inference. Do not retain Qwen's
         # tensors while the much larger FLUX pipeline and VAE need the memory.
-        self._enhancer.unload()
         negative_mode = ("none" if not negative else
                          "inline" if getattr(self, "_mlx_backend", None) is not None
                          else "native")
