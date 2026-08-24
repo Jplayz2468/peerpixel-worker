@@ -16,16 +16,16 @@ Guidance costs double on top of the step count: a guided step runs the
 transformer twice, once for the prompt and once for an empty one, and mixes
 them. Fifty steps is a hundred forward passes.
 
-A **preview** is 128x128 from the prompt alone, in six steps. It exists to
+A **preview** is 128x128 from the prompt alone, in fifty steps. It exists to
 answer whether the composition is the one somebody wanted, and it is asked
 several times before anything is chosen, so being cheap is most of its job. It
 goes straight back down the socket rather than being uploaded anywhere.
 
-A **master** is 512x512 at the full fifty guided steps, from the
+A **master** is 1024x1024 at the full fifty guided steps, from the
 prompt and a seed. Nothing else. It is not conditioned on the preview that was
 chosen, does not receive it, and does not know it exists.
 
-What ties the two together is the noise. A seed names one 512px noise tensor;
+What ties the two together is the noise. A seed names one 1024px noise tensor;
 a preview renders that same tensor averaged down to its own smaller shape, so
 the two share the low-frequency structure that decides where things end up in
 the frame. See `seeded_latents`, which is also where the reason it must be an
@@ -88,12 +88,12 @@ OPERATIONS = {
     # Temporarily use the full denoising schedule to compare convergence while
     # preserving the cheap 128px canvas.
     "draft": {"width": 128, "height": 128, "steps": 50, "guidance": GUIDANCE},
-    # The master retains the full fifty guided steps at 512px.
-    "master": {"width": 512, "height": 512, "steps": 50, "guidance": GUIDANCE},
+    # The master retains the full fifty guided steps at 1024px.
+    "master": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
     # A check is a master rendered a second time on a machine the operator
     # owns, so it is the same work with the same inputs. Only what happens to
     # the result differs: it is compared rather than delivered.
-    "verify": {"width": 512, "height": 512, "steps": 50, "guidance": GUIDANCE},
+    "verify": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
     # The admission test, and the only operation the network never sends. It is
     # master resolution -- that is what catches a card which cannot hold a real
     # render -- at a step count chosen to be timed rather than looked at.
@@ -696,7 +696,7 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.9.0"
+        runtime = "peerpixel-worker/0.10.0"
         return jpeg, {
             "enhancedPrompt": effective,
             "negativePrompt": negative,

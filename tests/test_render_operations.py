@@ -78,7 +78,7 @@ class OperationTableTests(unittest.TestCase):
             {"name": "draft", "width": 128, "height": 128, "steps": 50, "guidance": 4.0})
         self.assertEqual(
             render.operation_of({"operation": "master"}),
-            {"name": "master", "width": 512, "height": 512, "steps": 50, "guidance": 4.0})
+            {"name": "master", "width": 1024, "height": 1024, "steps": 50, "guidance": 4.0})
 
     def test_a_check_is_exactly_a_master(self):
         master = dict(render.operation_of({"operation": "master"}), name="check")
@@ -95,7 +95,7 @@ class OperationTableTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             render.operation_of({"operation": "master", "width": 256, "height": 256})
         with self.assertRaises(ValueError):
-            render.operation_of({"operation": "master", "width": 1024, "height": 1024})
+            render.operation_of({"operation": "master", "width": 2048, "height": 2048})
 
     def test_a_payload_with_no_operation_is_a_master(self):
         self.assertEqual(render.operation_of({})["name"], "master")
@@ -139,7 +139,7 @@ class DraftTests(unittest.TestCase):
             "manifestVersion": render.MANIFEST_VERSION,
         }, on_step=lambda done, total: steps.append((done, total)))
         self.assertTrue(jpeg.startswith(b"\xff\xd8\xff"))
-        self.assertEqual(backend.kwargs["width"], 512)
+        self.assertEqual(backend.kwargs["width"], 1024)
         self.assertEqual(backend.kwargs["steps"], 50)
         self.assertEqual(backend.kwargs["guidance"], 4.0)
         self.assertEqual(backend.kwargs["seed"], 7)
@@ -159,14 +159,14 @@ class DraftTests(unittest.TestCase):
 
 
 class MasterTests(unittest.TestCase):
-    def test_a_final_is_512px_at_fifty_guided_steps_from_prompt_and_seed(self):
+    def test_a_final_is_1024px_at_fifty_guided_steps_from_prompt_and_seed(self):
         pipe = FakePipeline()
         renderer_with(pipe).render(
             {"prompt": "a quiet harbour", "seed": 7, "operation": "master"})
 
         (call,) = pipe.calls
-        self.assertEqual(call["width"], 512)
-        self.assertEqual(call["height"], 512)
+        self.assertEqual(call["width"], 1024)
+        self.assertEqual(call["height"], 1024)
         self.assertEqual(call["num_inference_steps"], 50)
         self.assertEqual(call["generator"].initial_seed(), 7,
                          "the final keeps the preview's seed")
@@ -180,7 +180,7 @@ class MasterTests(unittest.TestCase):
         pipe = FakePipeline()
         renderer_with(pipe).render({"prompt": "x", "seed": 7, "operation": "master"})
         latents = pipe.calls[0]["latents"]
-        self.assertEqual(tuple(latents.shape), (1, 128, 32, 32))
+        self.assertEqual(tuple(latents.shape), (1, 128, 64, 64))
 
     def test_a_preview_and_its_final_share_their_noise(self):
         """The whole of the relationship between the two pictures."""
@@ -192,12 +192,12 @@ class MasterTests(unittest.TestCase):
         renderer.render({"prompt": "x", "seed": 7, "operation": "master"})
         preview, final = (call["latents"] for call in pipe.calls)
         self.assertTrue(torch.allclose(
-            preview, final.reshape(1, 128, 8, 4, 8, 4).mean(dim=(3, 5)) * 4, atol=1e-5))
+            preview, final.reshape(1, 128, 8, 8, 8, 8).mean(dim=(3, 5)) * 8, atol=1e-5))
 
     def test_the_decode_is_announced_so_the_bar_does_not_sit_at_the_last_step(self):
         """The freeze this exists to prevent, as a test.
 
-        Everything after the final step is the VAE building a 512px picture,
+        Everything after the final step is the VAE building a 1024px picture,
         and on a modest machine that is a minute or two. Inside the render
         phase it has nowhere to go: the phase has already measured itself
         complete, so the bar stops dead at step 50 of 50 and stays there.
@@ -292,7 +292,7 @@ class GuidanceTests(unittest.TestCase):
         spec = render.operation_of({"operation": "master", "steps": 4})
         self.assertEqual(spec["steps"], 50)
         with self.assertRaises(ValueError):
-            render.operation_of({"operation": "master", "width": 1024, "height": 1024})
+            render.operation_of({"operation": "master", "width": 2048, "height": 2048})
 
     def test_the_checkpoint_is_the_base_one_and_is_pinned(self):
         self.assertIn("base", render.MODEL,

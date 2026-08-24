@@ -29,7 +29,9 @@ JOB = {
 
 def estimated_master_ms(bench_ms: int) -> int:
     """Project the short steady-state sample to a fifty-step master."""
-    return round(max(0, bench_ms) * OPERATIONS["master"]["steps"] / BENCH_STEPS)
+    area = (OPERATIONS["master"]["width"] * OPERATIONS["master"]["height"] /
+            (OPERATIONS["bench"]["width"] * OPERATIONS["bench"]["height"]))
+    return round(max(0, bench_ms) * OPERATIONS["master"]["steps"] / BENCH_STEPS * area)
 
 
 def likely_generation_work(bench_ms: int) -> bool:
@@ -41,7 +43,7 @@ def generation_warning(bench_ms: int, accelerator: str) -> str:
         return ""
     estimate = estimated_master_ms(bench_ms)
     if "Apple silicon" in accelerator or "MLX" in accelerator:
-        return (f"A 512px render is estimated at about {estimate / 1000:.0f}s. "
+        return (f"A 1024px render is estimated at about {estimate / 1000:.0f}s. "
                 "Macs are slower than current NVIDIA workers and may receive very few image jobs; "
                 "this Mac remains useful for verification and upscaling.")
     return (f"A full high-resolution render is estimated at about {estimate / 1000:.0f}s. "

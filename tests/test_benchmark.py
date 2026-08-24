@@ -44,9 +44,9 @@ class BenchmarkTests(unittest.TestCase):
                     100_000, 20_000, valid=validity, quality_passed=True,
                 )["qualified"])
     def test_short_sample_predicts_full_master_and_warns_without_rejecting(self):
-        self.assertEqual(estimated_master_ms(4_000), 50_000)
-        self.assertTrue(likely_generation_work(4_000))
-        self.assertEqual(estimated_master_ms(8_000), 100_000)
+        self.assertEqual(estimated_master_ms(4_000), 200_000)
+        self.assertFalse(likely_generation_work(4_000))
+        self.assertEqual(estimated_master_ms(8_000), 400_000)
         self.assertFalse(likely_generation_work(8_000))
         warning = generation_warning(8_000, "Apple silicon MLX q4")
         self.assertIn("few image jobs", warning)
@@ -83,9 +83,9 @@ class BenchmarkTests(unittest.TestCase):
 
         spec = operation_of(JOB)
         self.assertEqual(spec["steps"], BENCH_STEPS)
-        # Still master resolution: that is what catches a card which cannot
-        # hold a real render, and it is the whole reason for the size.
-        self.assertEqual(spec["width"], OPERATIONS["master"]["width"])
+        # Kept at 512px so admission stays realistic but short after finals
+        # move to their full 1024px output size.
+        self.assertEqual(spec["width"], OPERATIONS["bench"]["width"])
 
     def test_the_network_can_never_send_a_benchmark(self):
         # Four steps of work submitted for a fifty-step price.

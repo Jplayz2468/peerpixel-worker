@@ -42,9 +42,9 @@ class ShapeTests(unittest.TestCase):
                 self.assertEqual(tuple(noise.shape), (1, 128, side, side))
 
     def test_the_final_and_the_preview_are_the_documented_sizes(self):
-        # 512/16 = 32 and 128/16 = 8, which is the exact factor of four the
+        # 1024/16 = 64 and 128/16 = 8, which is the exact factor of eight the
         # averaging depends on.
-        self.assertEqual(latent_grid(PIPE, OPERATIONS["master"]["width"]), 32)
+        self.assertEqual(latent_grid(PIPE, OPERATIONS["master"]["width"]), 64)
         self.assertEqual(latent_grid(PIPE, OPERATIONS["draft"]["width"]), 8)
 
     def test_a_size_that_does_not_divide_the_final_is_refused(self):
@@ -110,7 +110,7 @@ class SeedTests(unittest.TestCase):
         """The link between the two pictures, stated as arithmetic."""
         final = seeded_latents(PIPE, {**OPERATIONS["master"], "name": "master"}, 7, FLOAT32)
         preview = seeded_latents(PIPE, {**OPERATIONS["draft"], "name": "draft"}, 7, FLOAT32)
-        expected = final.reshape(1, 128, 8, 4, 8, 4).mean(dim=(3, 5)) * 4
+        expected = final.reshape(1, 128, 8, 8, 8, 8).mean(dim=(3, 5)) * 8
         self.assertTrue(torch.allclose(preview, expected, atol=1e-5))
 
     def test_a_verification_reproduces_the_final_exactly(self):

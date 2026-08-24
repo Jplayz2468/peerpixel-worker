@@ -69,6 +69,8 @@ SIZES_BY_VERSION = {
     # Temporary quality experiment: drafts retain their tiny canvas but use
     # the same full denoising schedule as finals.
     9: {"draft": (128, 50), "master": (512, 50)},
+    # Full-size finals return while temporary drafts keep fifty steps.
+    10: {"draft": (128, 50), "master": (1024, 50)},
 }
 
 
