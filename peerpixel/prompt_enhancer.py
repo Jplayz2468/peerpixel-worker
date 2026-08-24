@@ -39,6 +39,12 @@ Behavior:
 - When visible text is explicitly requested on a sign, poster, cover, label, screen, garment, title, caption, or similar surface: reproduce its exact spelling and capitalization in double quotes. Describe the physical surface plus typography, placement, material, contrast, and legibility so FLUX treats the words as part of the composition. Never paraphrase, translate, extend, or invent copy. Spoken dialogue is not visible image text unless the user requests a speech bubble, subtitle, or caption.
 - Develop the scene concept before applying the one required style supplied with the request. Never borrow characteristics from a different style."""
 
+AUTO_SYSTEM_INSTRUCTION = SYSTEM_INSTRUCTION.replace(
+    'exactly two string fields: "prompt" and "negative_prompt"',
+    'exactly three string fields: "style", "prompt", and "negative_prompt"',
+) + """
+- Choose exactly one style from: photoreal, anime, vector, cinematic, watercolor, illustration, pixel_art. Put its lowercase name in "style". Choose the style that best serves the subject and concept; do not default mechanically to photoreal."""
+
 STYLES = ("photoreal", "anime", "vector", "cinematic", "watercolor",
           "illustration", "pixel_art")
 STYLE_DIRECTIVES = {
@@ -98,7 +104,8 @@ def sampling_seed(prompt: str, style: str, variation=None) -> int:
 
 def parse_enhancement(text: str, *, fallback_prompt: str,
                       fallback_negative: str,
-                      visible_text: tuple[str, ...] = ()) -> dict[str, str]:
+                      visible_text: tuple[str, ...] = (),
+                      requested_style: str | None = None) -> dict[str, str]:
     cleaned = str(text or "").strip().strip("`").strip()
     try:
         value = json.loads(cleaned)
@@ -135,10 +142,16 @@ def parse_enhancement(text: str, *, fallback_prompt: str,
             if rule not in parts:
                 parts.append(rule)
         negative = ", ".join(parts)
-    return {
+    result = {
         "prompt": prompt,
         "negativePrompt": negative or fallback_negative.strip(),
     }
+    if requested_style == "auto":
+        chosen = str(value.get("style") if isinstance(value, dict) else "").strip().lower()
+        result["style"] = chosen if chosen in STYLES else "photoreal"
+        if not negative:
+            result["negativePrompt"] = negative_template(result["style"], visible_text)
+    return result
 
 
 def needs_concept(prompt: str) -> bool:
@@ -162,7 +175,9 @@ def enhancement_messages(prompt: str, style: str, variation=None,
                          concept: str = "") -> list[dict[str, str]]:
     variation_line = "" if variation is None else f"\nDraft variation seed: {variation}"
     visible_text = requested_visible_text(prompt)
-    template = negative_template(style, visible_text)
+    if style != "auto" and style not in STYLES:
+        raise ValueError(f"unknown_style:{style}")
+    template = negative_template(style, visible_text) if style != "auto" else COMMON_NEGATIVE
     text_instruction = ""
     if visible_text:
         copies = ", ".join(f'"{copy}"' for copy in visible_text)
@@ -171,14 +186,17 @@ def enhancement_messages(prompt: str, style: str, variation=None,
             "Preserve that copy exactly and describe its typography, placement, material, and legibility.\n"
         )
     return [
-        {"role": "system", "content": SYSTEM_INSTRUCTION},
+        {"role": "system", "content": AUTO_SYSTEM_INSTRUCTION if style == "auto" else SYSTEM_INSTRUCTION},
         {"role": "user", "content": (
-            f"Chosen style: {style.upper()}{variation_line}\nUser prompt: {prompt.strip()}\n"
+            (("Choose exactly one of these styles: " + ", ".join(STYLES)) if style == "auto"
+             else f"Chosen style: {style.upper()}") +
+            f"{variation_line}\nUser prompt: {prompt.strip()}\n"
             + (f"Creative scene concept: {concept.strip()}\n"
                "Use every compatible concrete fact from this concept.\n" if concept else "") +
             text_instruction +
-            f"Required style directive: {STYLE_DIRECTIVES[style]}\n"
-            "Apply this chosen style and no other style.\n"
+            (("After choosing, apply its matching style directive and no other style.\n")
+             if style == "auto" else
+             f"Required style directive: {STYLE_DIRECTIVES[style]}\nApply this chosen style and no other style.\n") +
             f"Negative prompt template: {template}\n"
             "Keep every applicable template item and add only scene-specific failures "
             "that do not negate anything the user requested."
@@ -224,12 +242,12 @@ class PromptEnhancer:
 
     def enhance_pair(self, prompt: str, style: str, *, enabled=True, resolved=None,
                      resolved_negative=None, variation=None) -> dict[str, str]:
-        if resolved:
+        if resolved and style != "auto":
             return {"prompt": str(resolved).strip(),
                     "negativePrompt": str(resolved_negative or "").strip()}
-        if not enabled:
+        if not enabled and style != "auto":
             return {"prompt": prompt.strip(), "negativePrompt": ""}
-        if style not in STYLES:
+        if style not in STYLES and style != "auto":
             raise ValueError(f"unknown_style:{style}")
         self.warm()
         visible_text = requested_visible_text(prompt)
@@ -246,11 +264,20 @@ class PromptEnhancer:
         )
         if not generated_text:
             raise RuntimeError("prompt_enhancement_empty")
-        return parse_enhancement(
+        parsed = parse_enhancement(
             generated_text, fallback_prompt=prompt,
-            fallback_negative=negative_template(style, visible_text),
+            fallback_negative=(negative_template(style, visible_text)
+                               if style != "auto" else ""),
             visible_text=visible_text,
+            requested_style=style,
         )
+        if not enabled:
+            parsed["prompt"] = prompt.strip()
+        elif resolved:
+            parsed["prompt"] = str(resolved).strip()
+            if resolved_negative is not None:
+                parsed["negativePrompt"] = str(resolved_negative).strip()
+        return parsed
 
     def enhance(self, prompt: str, style: str, *, enabled=True, resolved=None,
                 variation=None) -> str:

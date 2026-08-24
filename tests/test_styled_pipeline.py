@@ -207,6 +207,52 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertIn("Apply this chosen style and no other style", content)
         self.assertNotIn("1990s retro 2D anime", content)
 
+    def test_auto_style_asks_qwen_to_choose_one_supported_style(self):
+        messages = enhancement_messages("a rain-soaked city", "auto", variation=303)
+        content = messages[1]["content"]
+        self.assertIn("Choose exactly one", content)
+        for style in STYLE_RECIPES:
+            self.assertIn(style, content)
+
+    def test_auto_style_is_returned_with_the_enhanced_prompt(self):
+        enhancer = PromptEnhancer()
+        enhancer.warm = lambda: None
+        enhancer._generate_text = lambda *_args, **_kwargs: (
+            '{"style":"cinematic","prompt":"A detective crosses a rain-bright street.",'
+            '"negative_prompt":"watermark, malformed anatomy"}'
+        )
+        result = enhancer.enhance_pair("a detective", "auto", variation=9)
+        self.assertEqual(result["style"], "cinematic")
+        self.assertEqual(result["prompt"], "A detective crosses a rain-bright street.")
+
+    def test_renderer_uses_qwens_auto_style_but_never_overrides_an_explicit_style(self):
+        class Enhancer:
+            def enhance_pair(self, _prompt, style, **_kwargs):
+                return {"prompt": "polished", "negativePrompt": "blur",
+                        "style": "cinematic" if style == "auto" else style}
+            def unload(self): pass
+        class Safety:
+            def classify(self, _jpeg): return {"label": "normal", "nsfwScore": 0.0}
+
+        renderer = object.__new__(Renderer)
+        renderer._enhancer, renderer._safety = Enhancer(), Safety()
+        renderer._precision_mode = "native"
+        renderer._memory_mode = "resident"
+        renderer._style_mode = "prompt_only"
+        seen = []
+        renderer.render = lambda job, **_kwargs: seen.append(job) or b"jpeg"
+        _, auto = renderer.generate_job({
+            "prompt": "detective", "style": "auto", "operation": "draft", "seed": 7,
+            "recipeId": "auto-v1", "manifestVersion": "2026-08-23.1",
+        })
+        _, explicit = renderer.generate_job({
+            "prompt": "detective", "style": "anime", "operation": "draft", "seed": 8,
+            "recipeId": "anime-v1", "manifestVersion": "2026-08-23.1",
+        })
+        self.assertEqual((seen[0]["style"], auto["style"], auto["recipeId"]),
+                         ("cinematic", "cinematic", STYLE_RECIPES["cinematic"][0]))
+        self.assertEqual((seen[1]["style"], explicit["style"]), ("anime", "anime"))
+
     def test_safety_threshold_is_strictly_greater_than_point_65(self):
         self.assertEqual(THRESHOLD, 0.65)
 

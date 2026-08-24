@@ -675,13 +675,21 @@ class Renderer:
             ), "negativePrompt": str(job.get("negativePrompt") or "")}
         effective = pair["prompt"]
         negative = pair["negativePrompt"]
+        requested_style = job.get("style", "photoreal")
+        chosen_style = pair.get("style", requested_style)
+        if requested_style != "auto":
+            chosen_style = requested_style
+        if chosen_style not in STYLE_RECIPES:
+            raise ValueError(f"unknown_style:{chosen_style}")
         # Enhancement is complete before inference. Do not retain Qwen's
         # tensors while the much larger FLUX pipeline and VAE need the memory.
         self._enhancer.unload()
         negative_mode = ("none" if not negative else
                          "inline" if getattr(self, "_mlx_backend", None) is not None
                          else "native")
-        resolved = {**job, "prompt": effective, "negativePrompt": negative}
+        resolved = {**job, "prompt": effective, "negativePrompt": negative,
+                    "style": chosen_style,
+                    "recipeId": STYLE_RECIPES[chosen_style][0]}
         jpeg = self.render(resolved, **render_options)
         if on_phase is not None:
             on_phase("safety_check")
@@ -694,14 +702,15 @@ class Renderer:
             "negativePrompt": negative,
             "negativeConditioning": negative_mode,
             "moderation": moderation,
+            "style": chosen_style,
             "manifestVersion": job.get("manifestVersion", MANIFEST_VERSION),
-            "recipeId": STYLE_RECIPES[job.get("style", "photoreal")][0],
+            "recipeId": STYLE_RECIPES[chosen_style][0],
             "precision": getattr(self, "_precision_mode", "native"),
             "memoryMode": getattr(self, "_memory_mode", "resident"),
             "styleMode": getattr(self, "_style_mode", "prompt_only"),
             "attestations": [
                 {"operation": "prompt", "inputDigest": _digest({
-                    "prompt": job["prompt"], "style": job.get("style", "photoreal"),
+                    "prompt": job["prompt"], "style": requested_style,
                     "enhance": job.get("enhance", True),
                     "variation": job.get("seed") if job.get("operation") == "draft" else None,
                 }), "outputDigest": _digest({
@@ -710,7 +719,7 @@ class Renderer:
                 {"operation": "render", "inputDigest": _digest({
                     "prompt": effective, "seed": job.get("seed", 0),
                     "negativePrompt": negative, "negativeConditioning": negative_mode,
-                    "recipe": STYLE_RECIPES[job.get("style", "photoreal")][0],
+                    "recipe": STYLE_RECIPES[chosen_style][0],
                     "operation": job.get("operation", "master"),
                 }), "outputDigest": _digest(jpeg), "runtimeVersion": runtime},
                 {"operation": "moderation", "inputDigest": _digest(jpeg),

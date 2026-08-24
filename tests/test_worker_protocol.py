@@ -63,6 +63,9 @@ SIZES_BY_VERSION = {
     # Faster pixels and measured phase reporting. Finals retain all fifty
     # guided steps; only their spatial contract changes.
     7: {"draft": (128, 6), "master": (512, 50)},
+    # Auto-style requests are resolved by Qwen and returned as a concrete
+    # style/recipe pair in the generation evidence.
+    8: {"draft": (128, 6), "master": (512, 50)},
 }
 
 
