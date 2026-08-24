@@ -2,8 +2,8 @@
 
 A fake pipeline stands in for Klein, so these run on a laptop with no GPU and
 no model download. What is being checked is the contract the network depends
-on: sizes, step counts, and that a final is handed nothing but its prompt and
-the noise its seed names.
+on: sizes, step counts, and that every render is handed nothing but its prompt
+and the noise its seed names.
 """
 import io
 import unittest
@@ -72,13 +72,22 @@ def a_jpeg(size=(128, 128), colour=(200, 60, 20)):
 
 
 class OperationTableTests(unittest.TestCase):
-    def test_the_two_operations_have_the_sizes_the_network_prices(self):
-        self.assertEqual(
-            render.operation_of({"operation": "draft"}),
-            {"name": "draft", "width": 128, "height": 128, "steps": 50, "guidance": 4.0})
+    def test_network_operations_have_no_draft(self):
+        self.assertNotIn("draft", render.NETWORK_OPERATIONS)
+        self.assertIn("master", render.NETWORK_OPERATIONS)
+        self.assertIn("probe", render.NETWORK_OPERATIONS)
+
+    def test_a_draft_payload_is_refused(self):
+        with self.assertRaises(ValueError):
+            render.operation_of({"operation": "draft"})
+
+    def test_public_master_and_internal_probe_have_their_pinned_contracts(self):
         self.assertEqual(
             render.operation_of({"operation": "master"}),
             {"name": "master", "width": 1024, "height": 1024, "steps": 50, "guidance": 4.0})
+        self.assertEqual(
+            render.operation_of({"operation": "probe"}),
+            {"name": "probe", "width": 128, "height": 128, "steps": 50, "guidance": 4.0})
 
     def test_a_check_is_exactly_a_master(self):
         master = dict(render.operation_of({"operation": "master"}), name="check")
@@ -91,7 +100,7 @@ class OperationTableTests(unittest.TestCase):
 
     def test_a_job_cannot_talk_the_worker_into_a_size_it_was_not_priced_at(self):
         with self.assertRaises(ValueError):
-            render.operation_of({"operation": "draft", "width": 1024, "height": 1024})
+            render.operation_of({"operation": "probe", "width": 1024, "height": 1024})
         with self.assertRaises(ValueError):
             render.operation_of({"operation": "master", "width": 256, "height": 256})
         with self.assertRaises(ValueError):
@@ -101,19 +110,18 @@ class OperationTableTests(unittest.TestCase):
         self.assertEqual(render.operation_of({})["name"], "master")
 
 
-class DraftTests(unittest.TestCase):
-    def test_a_preview_is_128px_at_fifty_steps_from_the_prompt_alone(self):
+class ProbeTests(unittest.TestCase):
+    def test_a_probe_is_128px_at_fifty_steps_from_the_prompt_alone(self):
         pipe = FakePipeline()
         jpeg = renderer_with(pipe).render(
-            {"prompt": "a quiet harbour", "seed": 7, "operation": "draft"})
+            {"prompt": "a quiet harbour", "seed": 7, "operation": "probe"})
 
         (call,) = pipe.calls
         self.assertEqual(call["width"], 128)
         self.assertEqual(call["height"], 128)
         self.assertEqual(call["num_inference_steps"], 50)
-        self.assertEqual(call["guidance_scale"], 4.0,
-                         "a draft has to preview the master, so it is guided the same way")
-        self.assertNotIn("image", call, "a draft has nothing to be conditioned on")
+        self.assertEqual(call["guidance_scale"], 4.0)
+        self.assertNotIn("image", call, "a probe is a complete prompt-and-seed render")
         self.assertEqual(call["generator"].initial_seed(), 7)
         self.assertTrue(jpeg.startswith(b"\xff\xd8\xff"))
 
@@ -146,14 +154,14 @@ class DraftTests(unittest.TestCase):
         self.assertEqual(backend.kwargs["negative_prompt"], "watermark, blur")
         self.assertEqual(steps, [(50, 50)])
 
-    def test_a_preview_reports_every_step_it_runs(self):
+    def test_a_probe_reports_every_step_it_runs(self):
         # Read from the table rather than written out, because the point of
         # this test is that nothing is skipped -- not what the number is. The
         # number is pinned once, above, against the prices on the server.
-        steps = render.OPERATIONS["draft"]["steps"]
+        steps = render.OPERATIONS["probe"]["steps"]
         seen = []
         renderer_with(FakePipeline()).render(
-            {"prompt": "x", "seed": 1, "operation": "draft"},
+            {"prompt": "x", "seed": 1, "operation": "probe"},
             on_step=lambda done, total: seen.append((done, total)))
         self.assertEqual(seen, [(n, steps) for n in range(1, steps + 1)])
 
@@ -168,8 +176,7 @@ class MasterTests(unittest.TestCase):
         self.assertEqual(call["width"], 1024)
         self.assertEqual(call["height"], 1024)
         self.assertEqual(call["num_inference_steps"], 50)
-        self.assertEqual(call["generator"].initial_seed(), 7,
-                         "the final keeps the preview's seed")
+        self.assertEqual(call["generator"].initial_seed(), 7)
         # Not img2img and not reference conditioning. A final is a native
         # render at its own resolution with nothing else in its context, which
         # is the only way it can be as good as one.
@@ -181,18 +188,6 @@ class MasterTests(unittest.TestCase):
         renderer_with(pipe).render({"prompt": "x", "seed": 7, "operation": "master"})
         latents = pipe.calls[0]["latents"]
         self.assertEqual(tuple(latents.shape), (1, 128, 64, 64))
-
-    def test_a_preview_and_its_final_share_their_noise(self):
-        """The whole of the relationship between the two pictures."""
-        import torch
-
-        pipe = FakePipeline()
-        renderer = renderer_with(pipe)
-        renderer.render({"prompt": "x", "seed": 7, "operation": "draft"})
-        renderer.render({"prompt": "x", "seed": 7, "operation": "master"})
-        preview, final = (call["latents"] for call in pipe.calls)
-        self.assertTrue(torch.allclose(
-            preview, final.reshape(1, 128, 8, 8, 8, 8).mean(dim=(3, 5)) * 8, atol=1e-5))
 
     def test_the_decode_is_announced_so_the_bar_does_not_sit_at_the_last_step(self):
         """The freeze this exists to prevent, as a test.
@@ -212,14 +207,6 @@ class MasterTests(unittest.TestCase):
         self.assertEqual(order[-1], ("decode", None), "decoding is announced last")
         self.assertEqual(order[-2], ("step", 50), "and only after the final step")
         self.assertEqual(sum(1 for kind, _ in order if kind == "decode"), 1)
-
-    def test_a_reference_that_still_arrives_is_ignored_rather_than_refused(self):
-        # A server one version behind may still send one. Rendering the right
-        # picture beats failing the job over a field nobody reads.
-        pipe = FakePipeline()
-        renderer_with(pipe).render(
-            {"prompt": "x", "seed": 7, "operation": "master"}, reference=a_jpeg((256, 256)))
-        self.assertNotIn("image", pipe.calls[0])
 
     def test_cuda_oom_reloads_once_in_the_guaranteed_low_memory_mode(self):
         import torch
@@ -252,12 +239,12 @@ class GuidanceTests(unittest.TestCase):
     """
 
     def test_every_operation_is_guided(self):
-        for operation in ("draft", "master", "verify"):
+        for operation in ("master", "verify", "probe"):
             with self.subTest(operation=operation):
                 self.assertEqual(render.operation_of({"operation": operation})["guidance"], 4.0)
 
     def test_the_scale_reaches_the_pipeline(self):
-        for operation in ("draft", "master"):
+        for operation in ("master", "probe"):
             pipe = FakePipeline()
             renderer_with(pipe).render({"prompt": "x", "seed": 1, "operation": operation})
             self.assertEqual(pipe.calls[0]["guidance_scale"], 4.0)

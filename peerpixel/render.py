@@ -16,27 +16,11 @@ Guidance costs double on top of the step count: a guided step runs the
 transformer twice, once for the prompt and once for an empty one, and mixes
 them. Fifty steps is a hundred forward passes.
 
-A **preview** is 128x128 from the prompt alone, in fifty steps. It exists to
-answer whether the composition is the one somebody wanted, and it is asked
-several times before anything is chosen, so being cheap is most of its job. It
-goes straight back down the socket rather than being uploaded anywhere.
-
-A **master** is 1024x1024 at the full fifty guided steps, from the
-prompt and a seed. Nothing else. It is not conditioned on the preview that was
-chosen, does not receive it, and does not know it exists.
-
-What ties the two together is the noise. A seed names one 1024px noise tensor;
-a preview renders that same tensor averaged down to its own smaller shape, so
-the two share the low-frequency structure that decides where things end up in
-the frame. See `seeded_latents`, which is also where the reason it must be an
-average rather than an upscale is written down.
-
-This replaced handing the chosen preview back as a reference image. That worked
--- it kept the framing -- but it could not promise that a final looked like a
-native render at its own resolution, because it was not one: it was a render
-with somebody's 256px picture blown up 4x sitting in its context. It also meant
-a final could not start until the browser that asked for it sent the bytes
-back, so closing a tab lost a paid render. None of that is true any more.
+A public **master** is one native 1024x1024 render at the full fifty guided
+steps, from a prompt and seed. Internal fraud **probes** use the same render
+path with their own explicit 128x128/50-step contract, and verification repeats
+a master exactly. Every operation draws deterministic noise directly at its
+own size; no picture is promoted, conditioned on, or fed into another render.
 
 This file is deliberately plain and short. If a render goes wrong, this is where
 to look, and you can edit it and restart the worker without rebuilding anything.
@@ -83,17 +67,14 @@ GUIDANCE = 4.0
 #: checkpoint was chosen to get away from.
 GUIDANCE_RANGE = (1.5, 12.0)
 OPERATIONS = {
-    # A preview exists to answer one question -- is this the composition I
-    # wanted -- and it is asked several times before anything is chosen.
-    # Temporarily use the full denoising schedule to compare convergence while
-    # preserving the cheap 128px canvas.
-    "draft": {"width": 128, "height": 128, "steps": 50, "guidance": GUIDANCE},
-    # The master retains the full fifty guided steps at 1024px.
+    # Public generation is one native full-size render.
     "master": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
     # A check is a master rendered a second time on a machine the operator
     # owns, so it is the same work with the same inputs. Only what happens to
     # the result differs: it is compared rather than delivered.
     "verify": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
+    # Fraud checks are internal work with an explicit cheap spatial contract.
+    "probe": {"width": 128, "height": 128, "steps": 50, "guidance": GUIDANCE},
     # The admission test, and the only operation the network never sends. It is
     # master resolution -- that is what catches a card which cannot hold a real
     # render -- at a step count chosen to be timed rather than looked at.
@@ -109,7 +90,7 @@ OPERATIONS = {
 
 #: What may arrive over the wire. `bench` is local, and a job claiming to be one
 #: would be four steps of work submitted for a fifty-step price.
-NETWORK_OPERATIONS = ("draft", "master", "verify")
+NETWORK_OPERATIONS = ("master", "verify", "probe")
 MANIFEST_VERSION = "2026-08-23.1"
 STYLE_RECIPES = {
     name: (f"{name}-v2", ()) for name in (
@@ -399,50 +380,19 @@ def latent_grid(pipe, pixels: int) -> int:
 
 
 def seeded_latents(pipe, spec: dict, seed: int, dtype):
-    """The noise this render starts from, derived from the final's noise.
-
-    This is what replaces conditioning a final on the preview that was picked.
-    A seed names one 1024px noise tensor and nothing else. A preview renders
-    the same tensor with each block of it averaged down to its own smaller
-    shape, so the two share their low-frequency structure -- which is the part
-    of the noise that decides where things end up in the frame -- while the
-    final stays an ordinary render at its own resolution, with nothing upscaled
-    into it and no reference image anywhere.
-
-    The averaging is the only direction that works. Scaling noise *up* is what
-    it is tempting to do and it destroys the thing being scaled: a 4x
-    nearest-neighbour blow-up leaves neighbouring values 0.76 correlated and
-    bilinear leaves them 0.93, where real noise is 0.00, and the model reads
-    that correlation as structure that was never in the picture. Averaging
-    down survives it exactly. Each output is a sum of f*f independent unit
-    normals divided by f, so its variance is f*f/f*f = 1 and the blocks do not
-    overlap, which leaves the result an exact sample of the same distribution
-    the model was trained to start from. Measured: 0.001 correlation, variance
-    0.996.
-    """
+    """The deterministic noise this render starts from at its own size."""
     import torch
 
-    master = OPERATIONS["master"]
     channels = pipe.transformer.config.in_channels
-    tall = latent_grid(pipe, master["height"])
-    wide = latent_grid(pipe, master["width"])
+    tall = latent_grid(pipe, spec["height"])
+    wide = latent_grid(pipe, spec["width"])
     # Always drawn on the CPU at full precision. The seed has to name the same
     # tensor on every machine in the network, and neither a GPU's generator nor
     # bfloat16 rounding is portable enough to promise that.
-    noise = torch.randn((1, channels, tall, wide), dtype=torch.float32,
-                        generator=torch.Generator("cpu").manual_seed(int(seed) & 0xFFFFFFFF))
-
-    here_tall = latent_grid(pipe, spec["height"])
-    here_wide = latent_grid(pipe, spec["width"])
-    if (here_tall, here_wide) != (tall, wide):
-        down = tall // here_tall
-        if down < 1 or tall % here_tall or wide % here_wide or wide // here_wide != down:
-            raise ValueError(
-                f"{spec['name']} at {spec['width']}px does not divide the "
-                f"{master['width']}px final, so its noise cannot be derived from it")
-        noise = noise.reshape(1, channels, here_tall, down, here_wide, down)
-        noise = noise.mean(dim=(3, 5)) * down
-    return noise.to(dtype)
+    return torch.randn(
+        (1, channels, tall, wide), dtype=torch.float32,
+        generator=torch.Generator("cpu").manual_seed(int(seed) & 0xFFFFFFFF),
+    ).to(dtype)
 
 
 def seeded_generator(seed: int):
@@ -662,7 +612,6 @@ class Renderer:
         enhancement_options = {
             "enabled": job.get("enhance", True),
             "resolved": job.get("enhancedPrompt"),
-            "variation": job.get("seed") if job.get("operation") == "draft" else None,
         }
         if hasattr(self._enhancer, "enhance_pair"):
             pair = self._enhancer.enhance_pair(
@@ -696,7 +645,7 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.10.0"
+        runtime = "peerpixel-worker/0.11.0"
         return jpeg, {
             "enhancedPrompt": effective,
             "negativePrompt": negative,
@@ -712,7 +661,6 @@ class Renderer:
                 {"operation": "prompt", "inputDigest": _digest({
                     "prompt": job["prompt"], "style": requested_style,
                     "enhance": job.get("enhance", True),
-                    "variation": job.get("seed") if job.get("operation") == "draft" else None,
                 }), "outputDigest": _digest({
                     "prompt": effective, "negativePrompt": negative,
                 }), "runtimeVersion": runtime},
@@ -772,8 +720,8 @@ class Renderer:
         self.unload()
         self.warm()
 
-    def render(self, job: dict, on_step=None, reference: bytes | None = None,
-               on_demote=None, on_decode=None, on_phase=None) -> bytes:
+    def render(self, job: dict, on_step=None, on_demote=None, on_decode=None,
+               on_phase=None) -> bytes:
         """Render, and never hand back something that is not a picture.
 
         One retry, on the next precision down, because the failure this catches
@@ -842,10 +790,8 @@ class Renderer:
             self._style_mode = self.apply_style(job)
         width, height, steps = spec["width"], spec["height"], spec["steps"]
 
-        # The seed is the whole of the relationship between a preview and its
-        # final. Nothing is handed to the model but the prompt and the noise
-        # that seed names; `reference` is accepted and ignored so that a server
-        # still sending one gets a correct render rather than an error.
+        # Nothing is handed to the model but the prompt and the noise its seed
+        # names. Every operation starts directly at its own native resolution.
         latents = seeded_latents(self.pipe, spec, job.get("seed", 0), self._dtype)
 
         def decoding():
@@ -882,7 +828,5 @@ class Renderer:
             raise _Nonsense()
 
         buffer = io.BytesIO()
-        # A draft is thrown away in a minute and travels over a socket with a
-        # hard size ceiling; a master is the thing somebody keeps.
-        image.save(buffer, "JPEG", quality=80 if spec["name"] == "draft" else 92)
+        image.save(buffer, "JPEG", quality=92)
         return buffer.getvalue()

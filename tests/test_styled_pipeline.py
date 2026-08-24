@@ -48,18 +48,20 @@ class StyledPipelineTests(unittest.TestCase):
         renderer._enhancer, renderer._safety = Enhancer(), Safety()
         renderer.render = lambda *_args, **_kwargs: events.append("render") or b"jpeg"
         renderer.generate_job({
-            "prompt": "fox", "style": "anime", "operation": "draft", "seed": 7,
+            "prompt": "fox", "style": "anime", "operation": "master", "seed": 7,
             "recipeId": "anime-v1", "manifestVersion": "2026-08-23.1",
         })
         self.assertEqual(events, ["enhance", "release_prompt_model", "render", "moderate"])
 
-    def test_prompt_enhancer_accepts_a_per_draft_variation(self):
-        parameters = inspect.signature(PromptEnhancer.enhance).parameters
-        self.assertIn("variation", parameters)
-        first = enhancement_messages("fox", "anime", variation=101)
-        second = enhancement_messages("fox", "anime", variation=202)
-        self.assertNotEqual(first[1]["content"], second[1]["content"])
-        self.assertIn("Draft variation seed: 101", first[1]["content"])
+    def test_prompt_enhancement_has_no_candidate_variation_instruction(self):
+        for callable_ in (
+            sampling_seed, concept_messages, enhancement_messages,
+            PromptEnhancer.enhance_pair, PromptEnhancer.enhance,
+        ):
+            with self.subTest(callable=callable_.__name__):
+                self.assertNotIn("variation", inspect.signature(callable_).parameters)
+        content = enhancement_messages("fox", "anime")[1]["content"]
+        self.assertNotIn("variation seed", content.lower())
 
     def test_prompt_enhancer_downloads_qwen3_1_7b(self):
         enhancer = PromptEnhancer()
@@ -93,10 +95,10 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertIn('exactly two string fields: "prompt" and "negative_prompt"', SYSTEM_INSTRUCTION)
         enhancer = PromptEnhancer()
         self.assertEqual(enhancer.enhance(" raw prompt ", "photoreal", enabled=False), "raw prompt")
-        self.assertEqual(enhancer.enhance("raw", "anime", resolved=" exact draft prompt "), "exact draft prompt")
+        self.assertEqual(enhancer.enhance("raw", "anime", resolved=" exact prompt "), "exact prompt")
 
     def test_vague_prompts_request_a_complete_original_visual_concept(self):
-        messages = enhancement_messages("a man", "cinematic", variation=101)
+        messages = enhancement_messages("a man", "cinematic")
         instruction = messages[0]["content"]
         self.assertIn("invent a coherent, original visual concept", instruction)
         self.assertIn("specific identity or appearance", instruction)
@@ -178,20 +180,19 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertIn('reading "OPEN LATE"', parsed["prompt"])
         self.assertNotIn("'OPEN LATE'", parsed["prompt"])
 
-    def test_creative_sampling_is_reproducible_but_varies_per_draft(self):
-        first = sampling_seed("a man", "cinematic", 101)
-        self.assertEqual(first, sampling_seed("a man", "cinematic", 101))
-        self.assertNotEqual(first, sampling_seed("a man", "cinematic", 202))
-        self.assertNotEqual(first, sampling_seed("a man", "anime", 101))
+    def test_creative_sampling_is_reproducible_for_the_direct_request(self):
+        first = sampling_seed("a man", "cinematic")
+        self.assertEqual(first, sampling_seed("a man", "cinematic"))
+        self.assertNotEqual(first, sampling_seed("another man", "cinematic"))
+        self.assertNotEqual(first, sampling_seed("a man", "anime"))
 
     def test_only_vague_prompts_get_a_separate_scene_concept_pass(self):
         self.assertTrue(needs_concept("a man"))
         self.assertTrue(needs_concept("red car"))
         self.assertFalse(needs_concept(
             "A red coupe drifts around a wet mountain hairpin at blue hour"))
-        messages = concept_messages("a man", variation=101)
+        messages = concept_messages("a man")
         self.assertIn("identity or design, action, place, time or weather", messages[0]["content"])
-        self.assertIn("Variation seed: 101", messages[1]["content"])
 
     def test_all_seven_styles_have_distinct_prompt_directives(self):
         expected = {"photoreal", "anime", "vector", "cinematic", "watercolor",
@@ -202,13 +203,13 @@ class StyledPipelineTests(unittest.TestCase):
             self.assertIn("Required style directive:", message)
 
     def test_each_request_repeats_only_its_selected_style_as_mandatory(self):
-        content = enhancement_messages("a red car", "illustration", variation=303)[1]["content"]
+        content = enhancement_messages("a red car", "illustration")[1]["content"]
         self.assertIn("Required style directive: Direct polished editorial illustration", content)
         self.assertIn("Apply this chosen style and no other style", content)
         self.assertNotIn("1990s retro 2D anime", content)
 
     def test_auto_style_asks_qwen_to_choose_one_supported_style(self):
-        messages = enhancement_messages("a rain-soaked city", "auto", variation=303)
+        messages = enhancement_messages("a rain-soaked city", "auto")
         content = messages[1]["content"]
         self.assertIn("Choose exactly one", content)
         for style in STYLE_RECIPES:
@@ -221,7 +222,7 @@ class StyledPipelineTests(unittest.TestCase):
             '{"style":"cinematic","prompt":"A detective crosses a rain-bright street.",'
             '"negative_prompt":"watermark, malformed anatomy"}'
         )
-        result = enhancer.enhance_pair("a detective", "auto", variation=9)
+        result = enhancer.enhance_pair("a detective", "auto")
         self.assertEqual(result["style"], "cinematic")
         self.assertEqual(result["prompt"], "A detective crosses a rain-bright street.")
 
@@ -242,11 +243,11 @@ class StyledPipelineTests(unittest.TestCase):
         seen = []
         renderer.render = lambda job, **_kwargs: seen.append(job) or b"jpeg"
         _, auto = renderer.generate_job({
-            "prompt": "detective", "style": "auto", "operation": "draft", "seed": 7,
+            "prompt": "detective", "style": "auto", "operation": "master", "seed": 7,
             "recipeId": "auto-v1", "manifestVersion": "2026-08-23.1",
         })
         _, explicit = renderer.generate_job({
-            "prompt": "detective", "style": "anime", "operation": "draft", "seed": 8,
+            "prompt": "detective", "style": "anime", "operation": "master", "seed": 8,
             "recipeId": "anime-v1", "manifestVersion": "2026-08-23.1",
         })
         self.assertEqual((seen[0]["style"], auto["style"], auto["recipeId"]),
@@ -285,7 +286,7 @@ class StyledPipelineTests(unittest.TestCase):
         renderer._style_mode = "prompt_only"
         renderer.render = lambda *_args, **_kwargs: b"jpeg"
         _, evidence = renderer.generate_job({
-            "prompt": "fox", "style": "anime", "operation": "draft", "seed": 7,
+            "prompt": "fox", "style": "anime", "operation": "master", "seed": 7,
             "recipeId": "anime-v1", "manifestVersion": "2026-08-23.1",
         })
         self.assertEqual({key: evidence[key] for key in

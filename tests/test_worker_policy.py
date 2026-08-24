@@ -40,17 +40,17 @@ class StepTimingTests(unittest.TestCase):
         self.assertLess(worker.seconds_per_step("master"), 6.0)
         self.assertGreater(worker.seconds_per_step("master"), 2.0)
 
-    def test_a_preview_and_a_master_are_timed_separately(self):
-        # A step of a 1024px master and a step of a 256px preview differ by a
-        # factor of sixteen. One number for both would be wrong for each.
+    def test_an_internal_probe_and_a_master_are_timed_separately(self):
+        # Probe and master steps have different spatial costs, so one number
+        # would make both progress estimates wrong.
         worker.remember_step("master", 300.0, 50)
-        worker.remember_step("draft", 3.0, 6)
+        worker.remember_step("probe", 25.0, 50)
         self.assertAlmostEqual(worker.seconds_per_step("master"), 6.0)
-        self.assertAlmostEqual(worker.seconds_per_step("draft"), 0.5)
+        self.assertAlmostEqual(worker.seconds_per_step("probe"), 0.5)
 
     def test_it_survives_a_restart(self):
-        worker.remember_step("draft", 3.0, 6)
-        self.assertEqual(config.read()["secondsPerStep"]["draft"], 0.5)
+        worker.remember_step("probe", 25.0, 50)
+        self.assertEqual(config.read()["secondsPerStep"]["probe"], 0.5)
 
     def test_nonsense_is_ignored(self):
         worker.remember_step("master", 0, 50)

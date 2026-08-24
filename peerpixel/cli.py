@@ -15,9 +15,8 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 
-from . import api, config, console, plans, preview, runtime, settings, updater, weights
+from . import api, config, console, plans, runtime, settings, updater, weights
 from .console import (DIM, OFF, ask, block, confirm, note, problem, rule, say,
                       step_line, title)
 
@@ -419,7 +418,7 @@ def cmd_update(_argv: list[str]) -> None:
 
 
 def cmd_doctor(_argv: list[str]) -> None:
-    """Everything somebody would have to ask for, and a real render."""
+    """Everything somebody would have to ask for about this install."""
     import platform
 
     title("PeerPixel")
@@ -442,39 +441,12 @@ def cmd_doctor(_argv: list[str]) -> None:
                 "to test. Run: peerpixel setup")
         return
 
-    from .render import Renderer, describe_accelerator
+    from .render import describe_accelerator
 
     say(f"  renders on   {describe_accelerator()}")
     if not weights.cached():
-        problem("The model is not downloaded, so there is nothing to render.")
+        problem("The model is not downloaded.")
         return
-
-    title("Test render")
-    note("A picture with a known answer, so you can see what this machine actually "
-         "produces. A lighthouse should look like a lighthouse.")
-    job = {"id": "doctor", "prompt": "a lighthouse made of blown glass at dusk",
-           "seed": 7, "operation": "draft"}
-
-    def work(made):
-        made.begin("load")
-        renderer = Renderer()
-        renderer.warm()
-        made.begin("render", detail=job["prompt"])
-        return renderer.render(
-            job,
-            on_step=lambda done, total: made.report(done, total,
-                                                    detail=f"step {done} of {total}"),
-            on_decode=lambda: made.begin("decode"),
-            on_demote=lambda name: made.note(f"retrying in {name}"))
-
-    started = time.monotonic()
-    jpeg = run_plan("job", work)
-    where = preview.save(jpeg)
-    say()
-    step_line(True, f"Rendered in {console.clock(time.monotonic() - started)}",
-              f"{len(jpeg)} bytes")
-    note(f"Open it: {where}")
-
 
 def cmd_help(_argv: list[str]) -> None:
     banner()
@@ -508,7 +480,7 @@ HELP = (
     ("peerpixel bench", "time this machine against the admission limit"),
     ("peerpixel status", "this machine, and the state of the pool"),
     ("peerpixel settings", "list or change the knobs"),
-    ("peerpixel doctor", "what this machine is, and a test render"),
+    ("peerpixel doctor", "what this machine and install can use"),
     ("peerpixel update", "fetch and install a newer worker"),
     ("peerpixel licenses", "model licenses and third-party notices"),
 )

@@ -65,10 +65,6 @@ SETTINGS: tuple[Setting, ...] = (
         "with black specks, and the worker drops down this list on its own and "
         "remembers. Set it by hand only to overrule that."),
     Setting(
-        "keep-last", "Write the last picture rendered to disk", ("on", "off"), "on",
-        "One file, replaced each time, so you can see what this machine is "
-        "actually producing. `peerpixel doctor` tells you where it is."),
-    Setting(
         "unload-after", "Minutes idle before the model leaves memory", (), "120",
         "A loaded model holds several gigabytes. Dropping it frees them and "
         "costs the next job a reload. 0 keeps it forever."),
@@ -92,7 +88,7 @@ BY_NAME = {setting.name: setting for setting in SETTINGS}
 
 #: What each setting is called in the config file, where the names are older
 #: than this table and are not worth a migration.
-STORED = {"free": "allowFree", "dtype": "dtype", "keep-last": "keepLast",
+STORED = {"free": "allowFree", "dtype": "dtype",
           "unload-after": "unloadAfterMinutes", "colour": "colour", "api": "api",
           "update": "updateMode"}
 
@@ -167,10 +163,6 @@ def unload_seconds() -> float:
     except (TypeError, ValueError):
         minutes = 120.0
     return max(0.0, minutes) * 60.0
-
-
-def keep_last() -> bool:
-    return bool(config.read().get("keepLast", True))
 
 
 def update_mode() -> str:

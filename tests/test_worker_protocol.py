@@ -6,6 +6,8 @@ mismatch here means somebody is charged for a picture that never arrives.
 """
 import json
 import unittest
+from contextlib import nullcontext
+from unittest import mock
 
 from peerpixel import relay, worker
 
@@ -71,6 +73,9 @@ SIZES_BY_VERSION = {
     9: {"draft": (128, 50), "master": (512, 50)},
     # Full-size finals return while temporary drafts keep fifty steps.
     10: {"draft": (128, 50), "master": (1024, 50)},
+    # Public generation is one direct final. Fraud checks are explicitly
+    # internal probes with their own fixed wire contract.
+    11: {"master": (1024, 50), "probe": (128, 50)},
 }
 
 
@@ -111,28 +116,62 @@ class ProtocolVersionTests(unittest.TestCase):
         )
 
 
-class DraftSettlementTests(unittest.TestCase):
-    def test_an_accepted_draft_reports_what_it_earned(self):
+class SocketResultTests(unittest.TestCase):
+    def test_an_accepted_socket_result_reports_what_it_earned(self):
         link = FakeLink([
             None,
             json.dumps({"type": "result_accepted", "jobId": "other", "earnedCredits": 99}),
-            json.dumps({"type": "result_accepted", "jobId": "d1", "earnedCredits": 0.1}),
+            json.dumps({"type": "result_accepted", "jobId": "p1", "earnedCredits": 0.2}),
         ])
-        self.assertEqual(worker.await_settlement(link, "d1", clock=ticking(0.1)), 0.1)
+        self.assertEqual(worker.await_settlement(link, "p1", clock=ticking(0.1)), 0.2)
 
-    def test_a_rejected_draft_raises_so_the_job_is_reported_failed(self):
+    def test_a_rejected_socket_result_raises_so_the_job_is_reported_failed(self):
         link = FakeLink([
-            json.dumps({"type": "result_rejected", "jobId": "d1", "reason": "browser_gone"}),
+            json.dumps({"type": "result_rejected", "jobId": "p1", "reason": "byte_length"}),
         ])
         with self.assertRaises(RuntimeError) as caught:
-            worker.await_settlement(link, "d1", clock=ticking(0.1))
-        self.assertIn("browser_gone", str(caught.exception))
+            worker.await_settlement(link, "p1", clock=ticking(0.1))
+        self.assertIn("byte_length", str(caught.exception))
 
     def test_silence_settles_at_zero_rather_than_hanging(self):
         # The ledger is the truth; a missing acknowledgement only costs the
         # local earnings display until the next refresh.
         link = FakeLink([None, None])
-        self.assertEqual(worker.await_settlement(link, "d1", timeout=1, clock=ticking(0.4)), 0)
+        self.assertEqual(worker.await_settlement(link, "p1", timeout=1, clock=ticking(0.4)), 0)
+
+    def test_an_internal_probe_uses_probe_result_framing(self):
+        link = FakeLink([
+            json.dumps({"type": "result_accepted", "jobId": "probe-1", "earnedCredits": 0.2}),
+        ])
+        renderer = mock.Mock()
+        renderer.pipe = object()
+        renderer._precision_mode = "native"
+        renderer._memory_mode = "resident"
+        renderer.generate_job.return_value = (b"jpeg", {"attestations": []})
+        session = mock.Mock(images=0, pixels=0.0)
+        bar = mock.Mock()
+        reporter = mock.Mock()
+        job = {
+            "id": "probe-1", "prompt": "a quiet harbour", "seed": 7,
+            "operation": "probe", "steps": 50, "width": 128, "height": 128,
+            "transient": True,
+        }
+
+        with mock.patch.object(worker.plans, "tracker", return_value=bar), \
+             mock.patch.object(worker.plans, "remember"), \
+             mock.patch.object(worker.console, "Live", return_value=nullcontext()), \
+             mock.patch("peerpixel.job_phases.PhaseReporter", return_value=reporter):
+            earned = worker._do_job(
+                link, job, renderer, session, [link, ""], [0.0], [""],
+            )
+
+        frame = next(message for message in link.sent if isinstance(message, bytes))
+        header, payload = relay.decode(frame)
+        self.assertEqual(header["type"], "probe_result")
+        self.assertEqual(header["jobId"], "probe-1")
+        self.assertNotIn("draftId", header)
+        self.assertEqual(payload, b"jpeg")
+        self.assertEqual(earned, 0.2)
 
 
 class CompletedResultNotificationTests(unittest.TestCase):

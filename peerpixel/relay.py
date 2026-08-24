@@ -2,9 +2,8 @@
 
     [uint32 big-endian header length][UTF-8 JSON header][payload]
 
-Two things travel this way and nothing else does: a finished 128px draft going
-back to the dispatcher, which relays it live to the browser that asked, and the
-chosen draft coming the other way as the reference image for a master.
+Internal probe evidence and transient upscale exports travel this way. Public
+masters use the authoritative HTTP result route.
 
 This is the exact same format as `public/relay-frame.mjs` on the server side.
 If one end changes, both change: the header is routing information, and a
@@ -21,7 +20,7 @@ HEADER_BYTES = 4
 #: this far below an image payload while leaving room for legitimate evidence.
 MAX_HEADER_BYTES = 16 * 1024
 
-#: The dispatcher refuses anything larger, so there is no point sending it.
+#: The dispatcher refuses a probe result larger than this.
 MAX_RESULT_BYTES = 256 * 1024
 
 

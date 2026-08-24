@@ -9,9 +9,9 @@ class RelayFrameTests(unittest.TestCase):
     def test_a_frame_carries_its_header_and_bytes_back_unchanged(self):
         payload = bytes([0xFF, 0xD8, 0xFF, 1, 2, 3, 0xFF, 0xD9])
         header, body = relay.decode(
-            relay.encode({"type": "draft_result", "draftId": "abc"}, payload)
+            relay.encode({"type": "probe_result", "jobId": "abc"}, payload)
         )
-        self.assertEqual(header, {"type": "draft_result", "draftId": "abc"})
+        self.assertEqual(header, {"type": "probe_result", "jobId": "abc"})
         self.assertEqual(body, payload)
 
     def test_an_empty_payload_round_trips(self):
@@ -43,7 +43,7 @@ class RelayFrameTests(unittest.TestCase):
 
     def test_generation_attestations_fit_in_the_authenticated_header(self):
         header = {
-            "type": "draft_result", "draftId": "draft-1",
+            "type": "probe_result", "jobId": "probe-1",
             "enhancedPrompt": "richly described scene " * 100,
             "moderation": {"label": "normal", "nsfwScore": 0.00001},
             "manifestVersion": "2026-08-23.1", "recipeId": "photoreal-v1",

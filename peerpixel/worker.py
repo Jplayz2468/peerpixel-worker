@@ -16,25 +16,18 @@ import hashlib
 import json
 import time
 
-from . import api, compare, config, console, plans, preview, relay, settings
+from . import api, compare, config, console, plans, relay, settings
 from .console import DIM, OFF, clock, say, step_line
 from .system_status import SystemStatus
 
 #: What this install speaks, and it must match `PROTOCOL_VERSION` in the
 #: server's `public/generation-policy.mjs`.
 #:
-#: Version 1 rendered 512px and posted results over HTTP; it knew nothing of
-#: operations, transient previews or reference images. Version 2 rendered the
-#: step-distilled checkpoint: four steps, no guidance. Version 3 was a 128px
-#: preview and a 512px final, conditioned on the preview handed back over the
-#: socket. Version 5 renders a final from its seed alone: nothing is sent back,
-#: and a version-4 worker would sit waiting forty-five seconds for conditioning
-#: bytes that are never coming and then fail the job. Version 6 adds pinned
-#: style recipes, optional Qwen enhancement and mandatory moderation evidence.
-#: The server therefore
-#: gives work only to the current version, and an old install sits connected,
-#: idle and unpaid until it is updated.
-PROTOCOL_VERSION = 10
+#: Protocol 11 is direct-only: public work is a native 1024px master, internal
+#: fraud work is an explicit 128px probe, and only probes and upscales return
+#: bytes over the socket. Older installs speak the removed candidate contract,
+#: so the server keeps them connected but ineligible until they update.
+PROTOCOL_VERSION = 11
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2
@@ -66,12 +59,11 @@ def asked_to_stop() -> bool:
 
 
 def await_settlement(link, job_id: str, *, timeout: float = 30.0, clock=time.monotonic):
-    """What the dispatcher paid for a preview it has just relayed.
+    """What the dispatcher paid for a socket-delivered probe or upscale.
 
-    Delivery to the browser is the completion boundary, so by the time this
-    answer arrives the money has already moved; this only reads back how much,
-    for the local earnings line. A missing answer is worth no wait: the ledger
-    is the truth and the next refresh will show it.
+    By the time this answer arrives the ledger has already moved; this only
+    reads back how much for the local earnings line. A missing answer is worth
+    no wait: the ledger is the truth and the next refresh will show it.
     """
     deadline = clock() + timeout
     while clock() < deadline:
@@ -119,9 +111,8 @@ def seconds_per_step(operation: str) -> float:
 
     Remembered per operation and across runs, because the whole point is that
     the bar on somebody's *second* render is right from its first frame. A step
-    of a 1024px master and a step of a 256px preview are different amounts of
-    work by a factor of sixteen, so one number for both would be wrong for
-    each.
+    of a 1024px master and a step of a 128px probe are different amounts of
+    work, so one number for both would be wrong for each.
 
     A machine that has never rendered this operation falls back to the
     benchmark, which is the one timed render every worker has already done.
@@ -409,7 +400,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                             "attestations": [{"operation": "upscale",
                                 "inputDigest": hashlib.sha256(source).hexdigest(),
                                 "outputDigest": hashlib.sha256(jpeg).hexdigest(),
-                                "runtimeVersion": "peerpixel-worker/0.10.0"}]}
+                                "runtimeVersion": "peerpixel-worker/0.11.0"}]}
             elif hasattr(renderer, "generate_job"):
                 jpeg, evidence = renderer.generate_job(job, **render_options)
             else:  # small test doubles and third-party renderer integrations
@@ -423,12 +414,6 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
             session.learn(operation, time.monotonic() - render_started, steps)
             reporter.begin("delivering")
             bar.begin("deliver")
-            if settings.keep_last():
-                try:
-                    preview.save(jpeg)
-                except OSError:
-                    pass  # a full disk costs a thumbnail, not a render
-
             if operation == "auxiliary_verify":
                 api.submit_auxiliary(job["id"], observed_digest)
                 notify_finished(link, job["id"])
@@ -443,15 +428,12 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                     "type": "upscale_result", "jobId": job["id"], **evidence,
                 }, jpeg))
                 earned = await_settlement(link, job["id"])
-            elif job.get("transient"):
-                # A preview has no permanent home. It goes back down this
-                # socket and the dispatcher relays it straight to the browser
-                # waiting for it.
+            elif operation == "probe":
                 if len(jpeg) > relay.MAX_RESULT_BYTES:
-                    raise RuntimeError(f"the preview is {len(jpeg)} bytes, over the "
+                    raise RuntimeError(f"the probe is {len(jpeg)} bytes, over the "
                                        f"{relay.MAX_RESULT_BYTES} limit")
                 link.send(relay.encode({
-                    "type": "draft_result", "draftId": job["id"], **evidence,
+                    "type": "probe_result", "jobId": job["id"], **evidence,
                 }, jpeg))
                 earned = await_settlement(link, job["id"])
             else:

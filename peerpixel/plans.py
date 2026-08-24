@@ -57,7 +57,7 @@ PLANS: dict[str, Plan] = {
     # Decoding is a phase because it is minutes at 1024px on a modest machine,
     # and a phase is the only place work is allowed to live: anything happening
     # outside the plan has no room on the bar but the last percent.
-    "job": plan("job", "Rendering",
+    "job": plan("job", "Rendering the image",
                 Phase("load", "Loading the model", 3, 60),
                 Phase("render", "Rendering", 20, 90),
                 Phase("decode", "Turning it into a picture", 4, 25),

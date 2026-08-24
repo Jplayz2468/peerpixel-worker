@@ -44,6 +44,9 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             settings.put("nonsense", "1")
 
+    def test_removed_preview_persistence_has_no_setting(self):
+        self.assertNotIn("keep-last", settings.BY_NAME)
+
     def test_free_saved_without_the_account_agreeing_says_so(self):
         config.write(deviceId="dev_1", allowFreeSyncedAt=0)
         with mock.patch.object(settings.api, "set_free",

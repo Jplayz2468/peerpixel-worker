@@ -33,9 +33,9 @@ Output ONLY one valid compact JSON object with exactly two string fields: "promp
 
 Behavior:
 - If the user's prompt is simple, short, or underspecified: invent a coherent, original visual concept rather than only decorating the given words. Choose a specific identity or appearance, action or pose, setting, composition, lighting, atmosphere, textures, and one memorable storytelling detail suited to the chosen style. Make bold but plausible choices that turn inputs such as "a man" into a complete scene. Do not merely restate the subject and append the style directive.
-- For an underspecified prompt, silently decide at least four concrete non-style facts before writing: WHO or WHAT specifically, doing WHAT, WHERE, WHEN or under what conditions, and which prop or visual clue implies a story. Generic adjectives and medium markers do not count. Never copy a stock scene; invent decisions that fit this particular subject and variation seed.
+- For an underspecified prompt, silently decide at least four concrete non-style facts before writing: WHO or WHAT specifically, doing WHAT, WHERE, WHEN or under what conditions, and which prop or visual clue implies a story. Generic adjectives and medium markers do not count. Never copy a stock scene; invent decisions that fit this particular subject.
 - If the user's prompt is already detailed: Retain all core subjects, colors, and actions, refining flow and adding subtle medium markers.
-- Preserve explicit constraints and subject count. Do not add extra people, text, logos, brands, or named characters unless requested, and never contradict specified traits. If a draft variation seed is provided, use it to choose a genuinely distinct concept, not as visible text in the output.
+- Preserve explicit constraints and subject count. Do not add extra people, text, logos, brands, or named characters unless requested, and never contradict specified traits.
 - When visible text is explicitly requested on a sign, poster, cover, label, screen, garment, title, caption, or similar surface: reproduce its exact spelling and capitalization in double quotes. Describe the physical surface plus typography, placement, material, contrast, and legibility so FLUX treats the words as part of the composition. Never paraphrase, translate, extend, or invent copy. Spoken dialogue is not visible image text unless the user requests a speech bubble, subtitle, or caption.
 - Develop the scene concept before applying the one required style supplied with the request. Never borrow characteristics from a different style."""
 
@@ -97,8 +97,8 @@ def negative_template(style: str, visible_text: tuple[str, ...] = ()) -> str:
     return f"{COMMON_NEGATIVE}, {text_rules}, {STYLE_NEGATIVES[style]}"
 
 
-def sampling_seed(prompt: str, style: str, variation=None) -> int:
-    material = f"{style}\0{prompt.strip()}\0{variation if variation is not None else ''}"
+def sampling_seed(prompt: str, style: str) -> int:
+    material = f"{style}\0{prompt.strip()}"
     return int.from_bytes(hashlib.sha256(material.encode()).digest()[:8], "big") % (2 ** 31)
 
 
@@ -158,8 +158,7 @@ def needs_concept(prompt: str) -> bool:
     return len(re.findall(r"[\w'-]+", str(prompt))) <= 6
 
 
-def concept_messages(prompt: str, variation=None) -> list[dict[str, str]]:
-    variation_line = "" if variation is None else f"\nVariation seed: {variation}"
+def concept_messages(prompt: str) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": (
             "You invent concrete visual scenes from vague subjects. Output exactly one "
@@ -167,13 +166,11 @@ def concept_messages(prompt: str, variation=None) -> list[dict[str, str]]:
             "time or weather, and one meaningful prop or story clue. Use no medium, style, "
             "camera, quality, or generic mood language. Preserve subject count and constraints."
         )},
-        {"role": "user", "content": f"Subject: {prompt.strip()}{variation_line}"},
+        {"role": "user", "content": f"Subject: {prompt.strip()}"},
     ]
 
 
-def enhancement_messages(prompt: str, style: str, variation=None,
-                         concept: str = "") -> list[dict[str, str]]:
-    variation_line = "" if variation is None else f"\nDraft variation seed: {variation}"
+def enhancement_messages(prompt: str, style: str, concept: str = "") -> list[dict[str, str]]:
     visible_text = requested_visible_text(prompt)
     if style != "auto" and style not in STYLES:
         raise ValueError(f"unknown_style:{style}")
@@ -190,7 +187,7 @@ def enhancement_messages(prompt: str, style: str, variation=None,
         {"role": "user", "content": (
             (("Choose exactly one of these styles: " + ", ".join(STYLES)) if style == "auto"
              else f"Chosen style: {style.upper()}") +
-            f"{variation_line}\nUser prompt: {prompt.strip()}\n"
+            f"\nUser prompt: {prompt.strip()}\n"
             + (f"Creative scene concept: {concept.strip()}\n"
                "Use every compatible concrete fact from this concept.\n" if concept else "") +
             text_instruction +
@@ -241,7 +238,7 @@ class PromptEnhancer:
         return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
     def enhance_pair(self, prompt: str, style: str, *, enabled=True, resolved=None,
-                     resolved_negative=None, variation=None) -> dict[str, str]:
+                     resolved_negative=None) -> dict[str, str]:
         if resolved and style != "auto":
             return {"prompt": str(resolved).strip(),
                     "negativePrompt": str(resolved_negative or "").strip()}
@@ -254,13 +251,13 @@ class PromptEnhancer:
         concept = ""
         if needs_concept(prompt):
             concept = self._generate_text(
-                concept_messages(prompt, variation), max_new_tokens=CONCEPT_TOKENS,
-                seed=sampling_seed(prompt, "concept", variation),
+                concept_messages(prompt), max_new_tokens=CONCEPT_TOKENS,
+                seed=sampling_seed(prompt, "concept"),
             ).strip().strip('"')
-        messages = enhancement_messages(prompt, style, variation, concept)
+        messages = enhancement_messages(prompt, style, concept)
         generated_text = self._generate_text(
             messages, max_new_tokens=MAX_NEW_TOKENS,
-            seed=sampling_seed(prompt, style, variation),
+            seed=sampling_seed(prompt, style),
         )
         if not generated_text:
             raise RuntimeError("prompt_enhancement_empty")
@@ -279,11 +276,10 @@ class PromptEnhancer:
                 parsed["negativePrompt"] = str(resolved_negative).strip()
         return parsed
 
-    def enhance(self, prompt: str, style: str, *, enabled=True, resolved=None,
-                variation=None) -> str:
+    def enhance(self, prompt: str, style: str, *, enabled=True, resolved=None) -> str:
         """Compatibility API for callers that only need the positive prompt."""
         return self.enhance_pair(
-            prompt, style, enabled=enabled, resolved=resolved, variation=variation,
+            prompt, style, enabled=enabled, resolved=resolved,
         )["prompt"]
 
     def unload(self):
