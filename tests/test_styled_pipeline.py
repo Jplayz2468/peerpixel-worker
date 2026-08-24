@@ -7,7 +7,7 @@ from unittest import mock
 from peerpixel.prompt_enhancer import (
     PromptEnhancer, SYSTEM_INSTRUCTION, enhancement_messages,
     negative_template, parse_enhancement, sampling_seed,
-    concept_messages, needs_concept, requested_visible_text,
+    requested_visible_text, with_style_suffix,
 )
 from peerpixel.safety import SafetyClassifier, THRESHOLD
 from peerpixel.render import Renderer, STYLE_RECIPES
@@ -55,7 +55,7 @@ class StyledPipelineTests(unittest.TestCase):
 
     def test_prompt_enhancement_has_no_candidate_variation_instruction(self):
         for callable_ in (
-            sampling_seed, concept_messages, enhancement_messages,
+            sampling_seed, enhancement_messages,
             PromptEnhancer.enhance_pair, PromptEnhancer.enhance,
         ):
             with self.subTest(callable=callable_.__name__):
@@ -92,19 +92,31 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertEqual(parsed["prompt"], "First sentence. Second sentence!")
 
     def test_exact_prompt_instruction_and_bypass_paths(self):
-        self.assertIn('exactly two string fields: "prompt" and "negative_prompt"', SYSTEM_INSTRUCTION)
+        self.assertIn('exactly one string field: "prompt"', SYSTEM_INSTRUCTION)
         enhancer = PromptEnhancer()
-        self.assertEqual(enhancer.enhance(" raw prompt ", "photoreal", enabled=False), "raw prompt")
+        bypassed = enhancer.enhance(" raw prompt ", "photoreal", enabled=False)
+        self.assertTrue(bypassed.startswith("raw prompt,"))
+        self.assertIn("Kodak Portra 400", bypassed)
         self.assertEqual(enhancer.enhance("raw", "anime", resolved=" exact prompt "), "exact prompt")
 
-    def test_vague_prompts_request_a_complete_original_visual_concept(self):
+    def test_every_explicit_style_has_a_deterministic_flux_suffix(self):
+        for style in STYLE_RECIPES:
+            with self.subTest(style=style):
+                styled = with_style_suffix("a red car", style)
+                self.assertTrue(styled.startswith("a red car,"))
+                self.assertGreaterEqual(len(styled.split(",")), 5)
+
+    def test_vague_prompts_request_literal_visual_specificity_without_sentiment(self):
         messages = enhancement_messages("a man", "cinematic")
         instruction = messages[0]["content"]
         self.assertIn("invent a coherent, original visual concept", instruction)
-        self.assertIn("specific identity or appearance", instruction)
+        self.assertIn("complete appearance or design", instruction)
         self.assertIn("action or pose", instruction)
         self.assertIn("setting", instruction)
-        self.assertIn("storytelling detail", instruction)
+        self.assertIn("literal, externally visible", instruction)
+        self.assertIn("Do not invent emotions, inner life, symbolism", instruction)
+        self.assertIn("Do not use similes, poetic comparisons", instruction)
+        self.assertNotIn("storytelling detail", instruction)
         self.assertIn("Do not merely restate the subject and append the style directive", instruction)
         self.assertIn("Do not add extra people", instruction)
 
@@ -118,6 +130,29 @@ class StyledPipelineTests(unittest.TestCase):
             "prompt": "A rain-soaked detective under neon.",
             "negativePrompt": "watermark, duplicate people",
         })
+
+    def test_live_enhancement_uses_deterministic_negative_even_if_qwen_adds_one(self):
+        enhancer = PromptEnhancer()
+        enhancer.warm = lambda: None
+        enhancer._generate_text = lambda *_args, **_kwargs: (
+            '{"prompt":"A neon diner.","negative_prompt":"ignore me"}'
+        )
+        result = enhancer.enhance_pair("a diner", "cinematic")
+        self.assertEqual(result["negativePrompt"], negative_template("cinematic"))
+
+    def test_double_encoded_json_prompt_is_unwrapped(self):
+        parsed = parse_enhancement(
+            '{"prompt":"{\\"prompt\\":\\"A geometric library.\\"}"}',
+            fallback_prompt="library", fallback_negative="blur",
+        )
+        self.assertEqual(parsed["prompt"], "A geometric library.")
+
+    def test_truncated_json_wrapper_does_not_leak_into_prompt(self):
+        parsed = parse_enhancement(
+            '{"prompt":"A tiny knight beneath a dragon.',
+            fallback_prompt="knight", fallback_negative="blur",
+        )
+        self.assertEqual(parsed["prompt"], "A tiny knight beneath a dragon.")
 
     def test_malformed_structured_output_falls_back_without_losing_the_job(self):
         self.assertEqual(parse_enhancement(
@@ -144,6 +179,10 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertEqual(
             requested_visible_text("a bold poster with the words NO FUTURE"),
             ("NO FUTURE",),
+        )
+        self.assertEqual(
+            requested_visible_text('a finish-line banner reading "MOON CUP 2088"'),
+            ("MOON CUP 2088",),
         )
         self.assertEqual(requested_visible_text('a man saying "hello" to his friend'), ())
 
@@ -186,13 +225,36 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertNotEqual(first, sampling_seed("another man", "cinematic"))
         self.assertNotEqual(first, sampling_seed("a man", "anime"))
 
-    def test_only_vague_prompts_get_a_separate_scene_concept_pass(self):
-        self.assertTrue(needs_concept("a man"))
-        self.assertTrue(needs_concept("red car"))
-        self.assertFalse(needs_concept(
-            "A red coupe drifts around a wet mountain hairpin at blue hour"))
-        messages = concept_messages("a man")
-        self.assertIn("identity or design, action, place, time or weather", messages[0]["content"])
+    def test_generation_uses_greedy_decoding_to_avoid_language_corruption(self):
+        import torch
+        from transformers import BatchEncoding
+
+        enhancer = PromptEnhancer()
+        enhancer.tokenizer = mock.Mock()
+        enhancer.tokenizer.apply_chat_template.return_value = "chat"
+        enhancer.tokenizer.return_value = BatchEncoding({
+            "input_ids": torch.tensor([[1, 2]]),
+        })
+        enhancer.tokenizer.decode.return_value = '{"prompt":"clean"}'
+        enhancer.model = mock.Mock(device=torch.device("cpu"))
+        enhancer.model.generate.return_value = torch.tensor([[1, 2, 3]])
+
+        enhancer._generate_text([], max_new_tokens=10, seed=7)
+
+        self.assertFalse(enhancer.model.generate.call_args.kwargs["do_sample"])
+
+    def test_vague_prompts_use_one_style_aware_generation_pass(self):
+        enhancer = PromptEnhancer()
+        enhancer.warm = lambda: None
+        calls = []
+        enhancer._generate_text = lambda messages, **kwargs: (
+            calls.append(messages) or '{"prompt":"A complete literal scene."}'
+        )
+        result = enhancer.enhance_pair("a man", "illustration")
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(result["prompt"].startswith("A complete literal scene,"))
+        self.assertIn("charcoal and graphite", result["prompt"])
+        self.assertIn("Required style directive:", calls[0][1]["content"])
 
     def test_all_seven_styles_have_distinct_prompt_directives(self):
         expected = {"photoreal", "anime", "vector", "cinematic", "watercolor",
@@ -202,9 +264,28 @@ class StyledPipelineTests(unittest.TestCase):
             message = enhancement_messages("subject", style)[1]["content"]
             self.assertIn("Required style directive:", message)
 
+    def test_styles_require_concrete_medium_and_production_details(self):
+        photoreal = enhancement_messages("a chef", "photoreal")[1]["content"]
+        cinematic = enhancement_messages("a chef", "cinematic")[1]["content"]
+        anime = enhancement_messages("a chef", "anime")[1]["content"]
+        illustration = enhancement_messages("a chef", "illustration")[1]["content"]
+        vector = enhancement_messages("a chef", "vector")[1]["content"]
+        self.assertIn("camera body or film stock", photoreal)
+        self.assertIn("focal length", photoreal)
+        self.assertIn("aspect ratio", cinematic)
+        self.assertIn("shot size", cinematic)
+        self.assertIn("luminous gradient eyes", anime)
+        self.assertIn("soft layered shading", anime)
+        self.assertIn("high-key bloom", anime)
+        self.assertIn("Never add a face, person, hair, or eyes", anime)
+        self.assertIn("charcoal", illustration)
+        self.assertIn("scribbled contour", illustration)
+        self.assertIn("stroke weight", vector)
+
     def test_each_request_repeats_only_its_selected_style_as_mandatory(self):
         content = enhancement_messages("a red car", "illustration")[1]["content"]
-        self.assertIn("Required style directive: Direct polished editorial illustration", content)
+        self.assertIn("Required style directive: Direct an expressive hand-drawn charcoal", content)
+        self.assertIn("Include at least four applicable, concrete style-technique phrases", content)
         self.assertIn("Apply this chosen style and no other style", content)
         self.assertNotIn("1990s retro 2D anime", content)
 
@@ -224,7 +305,8 @@ class StyledPipelineTests(unittest.TestCase):
         )
         result = enhancer.enhance_pair("a detective", "auto")
         self.assertEqual(result["style"], "cinematic")
-        self.assertEqual(result["prompt"], "A detective crosses a rain-bright street.")
+        self.assertTrue(result["prompt"].startswith("A detective crosses a rain-bright street,"))
+        self.assertIn("40mm anamorphic lens", result["prompt"])
 
     def test_renderer_uses_qwens_auto_style_but_never_overrides_an_explicit_style(self):
         class Enhancer:
