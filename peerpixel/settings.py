@@ -58,6 +58,10 @@ SETTINGS: tuple[Setting, ...] = (
         "renders for strangers without this. It belongs to your account rather "
         "than to this machine, so setting it needs peerpixel.cc to agree."),
     Setting(
+        "private", "Allow private generations", ("on", "off"), "off",
+        "Private jobs are excluded from public feeds and may contain suggestive "
+        "material. This stays off until you explicitly opt in."),
+    Setting(
         "dtype", "Arithmetic precision", ("auto", "bfloat16", "float16", "float32"),
         "auto",
         "auto is what the checkpoint was trained in, and is right on nearly "
@@ -88,7 +92,7 @@ BY_NAME = {setting.name: setting for setting in SETTINGS}
 
 #: What each setting is called in the config file, where the names are older
 #: than this table and are not worth a migration.
-STORED = {"free": "allowFree", "dtype": "dtype",
+STORED = {"free": "allowFree", "private": "allowPrivate", "dtype": "dtype",
           "unload-after": "unloadAfterMinutes", "colour": "colour", "api": "api",
           "update": "updateMode"}
 
@@ -101,6 +105,8 @@ def current() -> list[tuple[Setting, str, str]]:
         value = setting.show(saved.get(STORED[setting.name], setting.blank()))
         note = ""
         if setting.name == "free" and value == "on" and not saved.get("allowFreeSyncedAt"):
+            note = "saved here, never accepted by your account"
+        if setting.name == "private" and value == "on" and not saved.get("allowPrivateSyncedAt"):
             note = "saved here, never accepted by your account"
         if setting.name == "dtype" and value != "auto" and saved.get("dtypeDemoted"):
             note = "chosen automatically after a render came back as nan"
@@ -118,6 +124,8 @@ def put(name: str, raw: str) -> str:
 
     if name == "free":
         return _sync_free(bool(value))
+    if name == "private":
+        return _sync_private(bool(value))
     if name == "dtype":
         config.write(dtypeDemoted=False)
         return ("Precision is chosen automatically again."
@@ -155,6 +163,20 @@ def _sync_free(wanted: bool) -> str:
         raise
     config.write(allowFreeSyncedAt=int(time.time()))
     return ("Now taking free work as well as paid." if wanted else "Paid work only.")
+
+
+def _sync_private(wanted: bool) -> str:
+    config.write(allowPrivateSyncedAt=0)
+    device = config.read().get("deviceId")
+    if not device:
+        return "Saved. It will be sent when this machine is paired."
+    api.set_private(device, wanted)
+    config.write(allowPrivateSyncedAt=int(time.time()))
+    return ("Private generations are enabled." if wanted else "Public generations only.")
+
+
+def allow_private() -> bool:
+    return bool(config.read().get("allowPrivate", False))
 
 
 def unload_seconds() -> float:

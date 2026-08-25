@@ -126,5 +126,10 @@ def set_free(device_id: str, allow: bool) -> dict:
                  payload={"deviceId": device_id, "allowFree": bool(allow)})
 
 
+def set_private(device_id: str, allow: bool) -> dict:
+    return _call("/api/device/private", method="POST", cookie=True,
+                 payload={"deviceId": device_id, "allowPrivate": bool(allow)})
+
+
 def pool() -> dict:
     return _call("/api/pool", auth=False)

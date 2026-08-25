@@ -76,6 +76,8 @@ SIZES_BY_VERSION = {
     # Public generation is one direct final. Fraud checks are explicitly
     # internal probes with their own fixed wire contract.
     11: {"master": (1024, 50), "probe": (128, 50)},
+    # Private-job consent and content-free official worker presentation.
+    12: {"master": (1024, 50), "probe": (128, 50)},
 }
 
 

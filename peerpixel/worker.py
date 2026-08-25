@@ -23,11 +23,12 @@ from .system_status import SystemStatus
 #: What this install speaks, and it must match `PROTOCOL_VERSION` in the
 #: server's `public/generation-policy.mjs`.
 #:
-#: Protocol 11 is direct-only: public work is a native 1024px master, internal
+#: Protocol 12 is direct-only: public work is a native 1024px master, internal
 #: fraud work is an explicit 128px probe, and only probes and upscales return
-#: bytes over the socket. Older installs speak the removed preview contract,
-#: so the server keeps them connected but ineligible until they update.
-PROTOCOL_VERSION = 11
+#: bytes over the socket. It adds explicit worker consent for private jobs and
+#: hides job content in the official worker interface. Older installs stay
+#: connected but ineligible until they update.
+PROTOCOL_VERSION = 12
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2
@@ -299,7 +300,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
     steps = int(job.get("steps", 0)) or 1
     link_ref[1] = job["id"]
     sent_at[0] = 0.0
-    prompt[0] = job["prompt"]
+    prompt[0] = "active generation"
 
     bar = plans.tracker("job", {"job.render": seconds_per_step(operation) * steps})
     started = time.monotonic()
@@ -330,7 +331,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 pass
             sent_at[0] = now
 
-    heading = f"{operation}  {DIM}{job['prompt'][:60]}{OFF}"
+    heading = f"{operation}  {DIM}job details hidden{OFF}"
     try:
         with console.Live(bar, heading=heading,
                           footer=hardware.line if hardware else None):
@@ -342,7 +343,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
             # Nothing to wait for. A final is its prompt and its seed, so it
             # starts the moment it is claimed -- and a browser that closed its
             # tab no longer costs somebody the render they paid for.
-            bar.begin("render", detail=job["prompt"][:80])
+            bar.begin("render", detail="prompt hidden")
             render_started = time.monotonic()
             render_options = {
                 "on_step": stepped,
