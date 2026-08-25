@@ -41,8 +41,10 @@ peerpixel doctor      diagnose and run a small test render
 peerpixel update      install the newest GitHub release
 ```
 
-Settings include free-work opt-in, arithmetic precision, idle unloading,
-terminal colour, and API endpoint. The worker uses the platform's consistent
+Settings include separate free-work and private-generation opt-ins, arithmetic
+precision, idle unloading, terminal colour, and API endpoint. Both content
+opt-ins default off and are synchronized with the paired device. The worker
+uses the platform's consistent
 automatic precision for production work so output quality does not vary by
 request. Apple silicon uses the published MLX 4-bit Klein Base package.
 
@@ -53,6 +55,12 @@ paid only after moderation approves it and the server accepts it. Failed or
 malformed probes earn zero. Upscale bytes are transient and never stored by the
 server. Signed evidence accompanies rendering and every auxiliary model so a
 trusted user can independently check sampled work.
+
+The official protocol-12 worker does not print assigned prompts or save image
+previews. Private jobs are dispatched only after the machine owner explicitly
+enables them. Inference still requires the prompt and pixels to exist in worker
+memory, and this project is open source, so a modified worker could inspect
+assigned content. Contributors must not inspect, retain, or republish it.
 
 The repository includes the Apache 2.0 license and third-party notices for all
 distributed model components. No model weights are committed to Git; Hugging
