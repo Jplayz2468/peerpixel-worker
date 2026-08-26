@@ -1,7 +1,9 @@
 # PeerPixel Worker
 
 Open-source volunteer renderer for [peerpixel.cc](https://peerpixel.cc). A
-public job is one 1024×1024 FLUX.2 Klein 4B Base final at 50 guided steps.
+public job is one roughly one-megapixel FLUX.2 Klein 4B Base final at 50 guided
+steps. Protocol 13 supports Square 1:1, Portrait 4:5, Landscape 5:4, Wide 16:9,
+and Tall 9:16 through five exact trusted dimensions.
 Workers also serve internal 128px verification probes and on-demand Qwen3-1.7B
 prompt enhancement, Falconsai safety classification, AuraSR-v2 upscaling, and
 trusted verification work. Models are revision-pinned and downloaded from
@@ -18,9 +20,11 @@ Download the release zip, extract it, and launch:
 | Linux | `PeerPixel.sh` or `PeerPixel.desktop` |
 
 The launcher installs a private Python environment, pairs the device, performs
-a short realistic benchmark, and starts the auto-updating worker. It does not
-require administrator access. On macOS, right-click the quarantined command and
-choose Open once.
+a short realistic benchmark, and starts the auto-updating worker. The server
+includes its minimum worker version in welcome and idle heartbeat messages. In
+automatic update mode, a worker updates and restarts while idle, never during a
+render. It does not require administrator access. On macOS, right-click the
+quarantined command and choose Open once.
 
 An NVIDIA GPU with at least 8 GB VRAM or an Apple-silicon Mac with at least
 16 GB unified memory is supported. Recent NVIDIA cards receive most generation
@@ -56,7 +60,7 @@ malformed probes earn zero. Upscale bytes are transient and never stored by the
 server. Signed evidence accompanies rendering and every auxiliary model so a
 trusted user can independently check sampled work.
 
-The official protocol-12 worker does not print assigned prompts or save image
+The official protocol-13 worker does not print assigned prompts or save image
 previews. Private jobs are dispatched only after the machine owner explicitly
 enables them. Inference still requires the prompt and pixels to exist in worker
 memory, and this project is open source, so a modified worker could inspect

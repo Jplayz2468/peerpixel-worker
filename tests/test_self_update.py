@@ -74,6 +74,18 @@ class WhenItRunsTests(unittest.TestCase):
         self.assertEqual(found.applied, 0)
         self.assertEqual(found.restarted, 0)
 
+    def test_a_server_required_version_updates_without_asking_github_which_is_latest(self):
+        recorder = Recorder(latest="v0.13.1", installed="0.13.0")
+        recorder.latest = lambda timeout=0: self.fail("server-directed updates do not poll GitHub")
+        with mock.patch.multiple(cli.updater, latest=recorder.latest,
+                                 installed=recorder.installed, apply=recorder.apply), \
+             mock.patch.object(cli.runtime, "restart",
+                               lambda: setattr(recorder, "restarted", recorder.restarted + 1)):
+            cli.server_update("0.13.1")
+
+        self.assertEqual(recorder.applied, 1)
+        self.assertEqual(recorder.restarted, 1)
+
 
 class LoopTests(unittest.TestCase):
     def setUp(self):

@@ -78,6 +78,9 @@ SIZES_BY_VERSION = {
     11: {"master": (1024, 50), "probe": (128, 50)},
     # Private-job consent and content-free official worker presentation.
     12: {"master": (1024, 50), "probe": (128, 50)},
+    # Five trusted near-one-megapixel aspect ratios. The default remains square;
+    # the complete accepted set is pinned by the render operation tests.
+    13: {"master": (1024, 50), "probe": (128, 50)},
 }
 
 
@@ -103,6 +106,28 @@ class ProtocolVersionTests(unittest.TestCase):
 
     def test_the_current_version_is_the_highest_one_described(self):
         self.assertEqual(worker.PROTOCOL_VERSION, max(SIZES_BY_VERSION))
+
+    def test_protocol_thirteen_accepts_server_directed_updates_while_idle(self):
+        requested = []
+        handled = worker.handle_idle_control(
+            {"type": "ack", "requiredWorkerVersion": "0.13.1"},
+            installed="0.13.0",
+            update=requested.append,
+        )
+        self.assertTrue(handled)
+        self.assertEqual(requested, ["0.13.1"])
+
+    def test_an_equal_or_malformed_server_version_is_not_an_update(self):
+        requested = []
+        for message in (
+            {"type": "ack", "requiredWorkerVersion": "0.13.0"},
+            {"type": "ack", "requiredWorkerVersion": ""},
+            {"type": "job", "requiredWorkerVersion": "9.0.0"},
+        ):
+            self.assertFalse(worker.handle_idle_control(
+                message, installed="0.13.0", update=requested.append,
+            ))
+        self.assertEqual(requested, [])
 
     def test_the_model_is_kept_loaded_for_two_idle_hours(self):
         self.assertFalse(worker.should_unload_model(100, 100 + 7199, loaded=True))

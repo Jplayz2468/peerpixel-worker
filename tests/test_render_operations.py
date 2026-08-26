@@ -106,6 +106,20 @@ class OperationTableTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             render.operation_of({"operation": "master", "width": 2048, "height": 2048})
 
+    def test_a_master_accepts_each_network_priced_aspect_ratio(self):
+        for width, height in (
+            (1024, 1024), (896, 1120), (1120, 896), (1344, 768), (768, 1344),
+        ):
+            with self.subTest(width=width, height=height):
+                spec = render.operation_of({
+                    "operation": "master", "width": width, "height": height,
+                })
+                self.assertEqual((spec["width"], spec["height"]), (width, height))
+
+    def test_a_master_still_refuses_an_arbitrary_near_megapixel_shape(self):
+        with self.assertRaises(ValueError):
+            render.operation_of({"operation": "master", "width": 1024, "height": 768})
+
     def test_a_payload_with_no_operation_is_a_master(self):
         self.assertEqual(render.operation_of({})["name"], "master")
 

@@ -16,11 +16,12 @@ Guidance costs double on top of the step count: a guided step runs the
 transformer twice, once for the prompt and once for an empty one, and mixes
 them. Fifty steps is a hundred forward passes.
 
-A public **master** is one native 1024x1024 render at the full fifty guided
-steps, from a prompt and seed. Internal fraud **probes** use the same render
-path with their own explicit 128x128/50-step contract, and verification repeats
-a master exactly. Every operation draws deterministic noise directly at its
-own size; no picture is promoted, conditioned on, or fed into another render.
+A public **master** is one native, roughly one-megapixel render at the full
+fifty guided steps, from a prompt and seed. Its dimensions come from five exact
+trusted aspect-ratio presets. Internal fraud **probes** use the same render path
+with their own explicit 128x128/50-step contract, and verification repeats a
+master exactly. Every operation draws deterministic noise directly at its own
+size; no picture is promoted, conditioned on, or fed into another render.
 
 This file is deliberately plain and short. If a render goes wrong, this is where
 to look, and you can edit it and restart the worker without rebuilding anything.
@@ -87,6 +88,16 @@ OPERATIONS = {
     # limit written for four.
     "bench": {"width": 512, "height": 512, "steps": 4, "guidance": GUIDANCE},
 }
+
+#: The coordinator prices only these near-one-megapixel canvases. A worker may
+#: trust the exact set, never arbitrary dimensions supplied by a job payload.
+TRUSTED_MASTER_SIZES = frozenset({
+    (1024, 1024),
+    (896, 1120),
+    (1120, 896),
+    (1344, 768),
+    (768, 1344),
+})
 
 #: What may arrive over the wire. `bench` is local, and a job claiming to be one
 #: would be four steps of work submitted for a fifty-step price.
@@ -340,20 +351,27 @@ def _quieten() -> None:
 def operation_of(job: dict) -> dict:
     """What to render, from the operation and the parts of the payload it trusts.
 
-    A job may not talk the worker into a different resolution or step count than
-    the one it was priced at, so those come from the table above and a payload
-    that disagrees is refused. Guidance is taken from the payload when it is
-    given and sane, because it costs nothing extra and being able to retune it
-    from the server is worth more than pinning it.
+    A job may not talk the worker into an unpriced resolution or step count.
+    Masters and exact verification work use the trusted aspect-ratio set;
+    everything else uses its single table entry. Guidance is taken from the
+    payload when it is given and sane, because it costs nothing extra and being
+    able to retune it from the server is worth more than pinning it.
     """
     name = job.get("operation", "master")
     spec = OPERATIONS.get(name)
     if spec is None:
         raise ValueError(f"unknown operation: {name}")
-    for axis in ("width", "height"):
-        asked = job.get(axis)
-        if asked is not None and int(asked) != spec[axis]:
-            raise ValueError(f"{name} is {spec[axis]}px, not {asked}px")
+    if name in ("master", "verify"):
+        width = int(job.get("width", spec["width"]))
+        height = int(job.get("height", spec["height"]))
+        if (width, height) not in TRUSTED_MASTER_SIZES:
+            raise ValueError(f"{name} does not allow {width}x{height}")
+    else:
+        width, height = spec["width"], spec["height"]
+        for axis in ("width", "height"):
+            asked = job.get(axis)
+            if asked is not None and int(asked) != spec[axis]:
+                raise ValueError(f"{name} is {spec[axis]}px, not {asked}px")
 
     guidance = spec["guidance"]
     asked = job.get("guidance")
@@ -365,7 +383,7 @@ def operation_of(job: dict) -> dict:
         low, high = GUIDANCE_RANGE
         if asked is not None and low <= asked <= high:
             guidance = asked
-    return {"name": name, **spec, "guidance": guidance}
+    return {"name": name, **spec, "width": width, "height": height, "guidance": guidance}
 
 
 def latent_grid(pipe, pixels: int) -> int:

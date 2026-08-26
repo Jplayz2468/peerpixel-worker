@@ -16,7 +16,7 @@ import hashlib
 import json
 import time
 
-from . import api, compare, config, console, plans, relay, settings
+from . import api, compare, config, console, plans, relay, settings, updater
 from .console import DIM, OFF, clock, say, step_line
 from .system_status import SystemStatus
 
@@ -28,7 +28,7 @@ from .system_status import SystemStatus
 #: bytes over the socket. It adds explicit worker consent for private jobs and
 #: hides job content in the official worker interface. Older installs stay
 #: connected but ineligible until they update.
-PROTOCOL_VERSION = 12
+PROTOCOL_VERSION = 13
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2
@@ -99,6 +99,26 @@ def notify_finished(link, job_id: str) -> bool:
         return True
     except Exception:  # noqa: BLE001 - reconnect will discover the free slot
         return False
+
+
+def handle_idle_control(message: dict, *, installed: str | None = None, update=None) -> bool:
+    """Apply a coordinator-required update before accepting another job.
+
+    Welcome and heartbeat replies arrive only while this loop is idle. The
+    coordinator always states its minimum worker version, so a running worker
+    learns about a release without polling GitHub and never interrupts a render.
+    """
+    if message.get("type") not in ("welcome", "ack"):
+        return False
+    required = str(message.get("requiredWorkerVersion") or "")
+    here = updater.installed() if installed is None else installed
+    if not required or not updater.newer(required, here):
+        return False
+    if update is None:
+        from .cli import server_update
+        update = server_update
+    update(required)
+    return True
 
 
 #: How much a new timing counts against everything before it. Low, because a
@@ -205,7 +225,8 @@ def run(renderer, once: bool = False) -> int:
     plans.remember(start)
 
     url = (config.API.replace("http", "ws", 1)
-           + f"/api/device/connect?protocol={PROTOCOL_VERSION}")
+           + f"/api/device/connect?protocol={PROTOCOL_VERSION}"
+           + f"&version={updater.installed()}")
     headers = {"authorization": f"Bearer {saved['token']}", "user-agent": api.USER_AGENT}
     backoff = RECONNECT_MIN
     link_ref: list = [None, ""]
@@ -257,6 +278,8 @@ def run(renderer, once: bool = False) -> int:
                             try:
                                 message = json.loads(raw)
                             except json.JSONDecodeError:
+                                continue
+                            if handle_idle_control(message):
                                 continue
                             if message.get("type") != "job":
                                 continue

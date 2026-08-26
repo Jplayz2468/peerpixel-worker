@@ -280,24 +280,33 @@ def self_update() -> None:
         return
     with console.Line(lambda: "checking for a newer PeerPixel"):
         latest = updater.latest(timeout=5.0)
+    server_update(latest, mode=mode)
+
+
+def server_update(required: str, *, mode: str | None = None) -> bool:
+    """Install the minimum version named by the coordinator, while idle."""
+    mode = settings.update_mode() if mode is None else mode
     here = updater.installed()
-    if not latest or not updater.newer(latest, here):
-        return
-    if os.environ.get(UPDATED) == latest:
-        note(f"{latest} says it is newer than {here}, and installing it did not "
+    if not required or not updater.newer(required, here):
+        return False
+    if os.environ.get(UPDATED) == required:
+        note(f"{required} says it is newer than {here}, and installing it did not "
              f"change that. Staying on {here}.")
-        return
+        return False
+    if mode == "off":
+        return False
     if mode == "notify":
-        note(f"{latest} is out; you have {here}. Install it with: peerpixel update")
-        return
+        note(f"{required} is required; you have {here}. Install it with: peerpixel update")
+        return False
 
     result = run_plan("update", updater.apply)
     if not result.get("updated"):
-        return
+        return False
     step_line(True, f"Updated to {result['version']}.")
     note("Restarting into it.")
     os.environ[UPDATED] = str(result["version"])
     runtime.restart()
+    return True
 
 
 def cmd_start(argv: list[str]) -> None:
