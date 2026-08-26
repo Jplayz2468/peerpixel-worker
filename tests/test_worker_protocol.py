@@ -81,6 +81,8 @@ SIZES_BY_VERSION = {
     # Five trusted near-one-megapixel aspect ratios. The default remains square;
     # the complete accepted set is pinned by the render operation tests.
     13: {"master": (1024, 50), "probe": (128, 50)},
+    # Source-conditioned variation and masked inpainting on capable CUDA workers.
+    14: {"master": (1024, 50), "probe": (128, 50)},
 }
 
 
@@ -107,25 +109,25 @@ class ProtocolVersionTests(unittest.TestCase):
     def test_the_current_version_is_the_highest_one_described(self):
         self.assertEqual(worker.PROTOCOL_VERSION, max(SIZES_BY_VERSION))
 
-    def test_protocol_thirteen_accepts_server_directed_updates_while_idle(self):
+    def test_protocol_fourteen_accepts_server_directed_updates_while_idle(self):
         requested = []
         handled = worker.handle_idle_control(
-            {"type": "ack", "requiredWorkerVersion": "0.13.1"},
-            installed="0.13.0",
+            {"type": "ack", "requiredWorkerVersion": "0.14.1"},
+            installed="0.14.0",
             update=requested.append,
         )
         self.assertTrue(handled)
-        self.assertEqual(requested, ["0.13.1"])
+        self.assertEqual(requested, ["0.14.1"])
 
     def test_an_equal_or_malformed_server_version_is_not_an_update(self):
         requested = []
         for message in (
-            {"type": "ack", "requiredWorkerVersion": "0.13.0"},
+            {"type": "ack", "requiredWorkerVersion": "0.14.0"},
             {"type": "ack", "requiredWorkerVersion": ""},
             {"type": "job", "requiredWorkerVersion": "9.0.0"},
         ):
             self.assertFalse(worker.handle_idle_control(
-                message, installed="0.13.0", update=requested.append,
+                message, installed="0.14.0", update=requested.append,
             ))
         self.assertEqual(requested, [])
 
@@ -144,6 +146,38 @@ class ProtocolVersionTests(unittest.TestCase):
 
 
 class SocketResultTests(unittest.TestCase):
+    def test_an_edit_fetches_private_source_and_mask_only_after_assignment(self):
+        link = FakeLink()
+        renderer = mock.Mock()
+        renderer.pipe = object()
+        renderer._precision_mode = "native"
+        renderer._memory_mode = "resident"
+        renderer.generate_job.return_value = (b"jpeg", {"attestations": []})
+        session = mock.Mock(images=0, pixels=0.0)
+        bar = mock.Mock()
+        reporter = mock.Mock()
+        job = {
+            "id": "edit-1", "prompt": "fix the hand", "seed": 7,
+            "operation": "master", "steps": 50, "width": 1024, "height": 1024,
+            "editMode": "inpaint", "editStrength": .65,
+            "sourceImageId": "source", "hasMask": True,
+        }
+
+        with mock.patch.object(worker.plans, "tracker", return_value=bar), \
+             mock.patch.object(worker.plans, "remember"), \
+             mock.patch.object(worker.console, "Live", return_value=nullcontext()), \
+             mock.patch("peerpixel.job_phases.PhaseReporter", return_value=reporter), \
+             mock.patch.object(worker.api, "edit_asset", side_effect=[b"source", b"mask"]) as fetch, \
+             mock.patch.object(worker.api, "submit_result", return_value={"earnedCredits": 1}):
+            worker._do_job(link, job, renderer, session, [link, ""], [0.0], [""])
+
+        self.assertEqual(fetch.call_args_list, [
+            mock.call("edit-1", "source"), mock.call("edit-1", "mask"),
+        ])
+        rendered = renderer.generate_job.call_args.args[0]
+        self.assertEqual(rendered["_editSource"], b"source")
+        self.assertEqual(rendered["_editMask"], b"mask")
+
     def test_an_accepted_socket_result_reports_what_it_earned(self):
         link = FakeLink([
             None,

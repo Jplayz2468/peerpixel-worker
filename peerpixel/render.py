@@ -23,6 +23,9 @@ with their own explicit 128x128/50-step contract, and verification repeats a
 master exactly. Every operation draws deterministic noise directly at its own
 size; no picture is promoted, conditioned on, or fed into another render.
 
+Protocol 14 edit jobs explicitly opt into source-conditioned variation or a
+painted inpaint mask, with tightly bounded denoise strength.
+
 This file is deliberately plain and short. If a render goes wrong, this is where
 to look, and you can edit it and restart the worker without rebuilding anything.
 """
@@ -383,7 +386,60 @@ def operation_of(job: dict) -> dict:
         low, high = GUIDANCE_RANGE
         if asked is not None and low <= asked <= high:
             guidance = asked
+    if job.get("editMode") and name != "master":
+        raise ValueError("editing_is_master_only")
     return {"name": name, **spec, "width": width, "height": height, "guidance": guidance}
+
+
+EDIT_STRENGTHS = {
+    "vary": (0.15, 0.45, 0.25),
+    "inpaint": (0.35, 0.85, 0.65),
+}
+
+
+def edit_spec(job: dict) -> dict | None:
+    mode = job.get("editMode")
+    if not mode:
+        return None
+    if mode not in EDIT_STRENGTHS:
+        raise ValueError("unknown_edit_mode")
+    if not job.get("sourceImageId"):
+        raise ValueError("edit_source_required")
+    low, high, default = EDIT_STRENGTHS[mode]
+    try:
+        strength = float(job.get("editStrength", default))
+    except (TypeError, ValueError):
+        raise ValueError("invalid_edit_strength") from None
+    if not low <= strength <= high:
+        raise ValueError("invalid_edit_strength")
+    if mode == "inpaint" and not job.get("hasMask"):
+        raise ValueError("edit_mask_required")
+    return {"mode": mode, "strength": strength}
+
+
+def prepare_edit_images(source_bytes: bytes, mask_bytes: bytes | None, *,
+                        mode: str, width: int, height: int):
+    """Decode private edit inputs and turn the browser alpha into a model mask."""
+    from PIL import Image
+
+    try:
+        source = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+        source = source.resize((width, height), Image.Resampling.LANCZOS)
+    except Exception as error:
+        raise ValueError("invalid_edit_source") from error
+    if mode == "vary":
+        return source, Image.new("L", (width, height), 255)
+    if not mask_bytes:
+        raise ValueError("edit_mask_required")
+    try:
+        submitted = Image.open(io.BytesIO(mask_bytes))
+        mask = submitted.getchannel("A") if "A" in submitted.getbands() else submitted.convert("L")
+        mask = mask.resize((width, height), Image.Resampling.NEAREST)
+    except Exception as error:
+        raise ValueError("invalid_edit_mask") from error
+    if mask.getbbox() is None:
+        raise ValueError("edit_mask_empty")
+    return source, mask
 
 
 def latent_grid(pipe, pixels: int) -> int:
@@ -494,6 +550,7 @@ class Renderer:
 
     def __init__(self):
         self.pipe = None
+        self._edit_pipe = None
         self._enhancer = None
         self._safety = None
         self._device, self._dtype, self.accelerator, self._total = pick_device()
@@ -506,6 +563,19 @@ class Renderer:
         self._forced_memory_mode = None
         self._precision_mode = "native"
         self._style_mode = "prompt_only"
+
+    @property
+    def supports_editing(self) -> bool:
+        return self._device == "cuda" and getattr(self, "_mlx_backend", None) is None
+
+    def edit_pipeline(self):
+        if not self.supports_editing:
+            raise RuntimeError("editing_requires_cuda")
+        if self._edit_pipe is None:
+            from diffusers import Flux2KleinInpaintPipeline
+            self._edit_pipe = Flux2KleinInpaintPipeline.from_pipe(self.pipe)
+            self._edit_pipe.set_progress_bar_config(disable=True)
+        return self._edit_pipe
 
     def warm(self):
         """Load once and keep it. A 4B model takes tens of seconds to load."""
@@ -663,7 +733,11 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.12.0"
+        runtime = "peerpixel-worker/0.14.0"
+        source_digest = (hashlib.sha256(job.get("_editSource", b"")).hexdigest()
+                         if job.get("editMode") else None)
+        mask_digest = (hashlib.sha256(job.get("_editMask", b"")).hexdigest()
+                       if job.get("_editMask") else None)
         return jpeg, {
             "enhancedPrompt": effective,
             "negativePrompt": negative,
@@ -687,6 +761,8 @@ class Renderer:
                     "negativePrompt": negative, "negativeConditioning": negative_mode,
                     "recipe": STYLE_RECIPES[chosen_style][0],
                     "operation": job.get("operation", "master"),
+                    "editMode": job.get("editMode"), "editStrength": job.get("editStrength"),
+                    "sourceDigest": source_digest, "maskDigest": mask_digest,
                 }), "outputDigest": _digest(jpeg), "runtimeVersion": runtime},
                 {"operation": "moderation", "inputDigest": _digest(jpeg),
                  "outputDigest": _digest(moderation), "runtimeVersion": runtime},
@@ -720,6 +796,7 @@ class Renderer:
             return
         old = self.pipe
         self.pipe = None
+        self._edit_pipe = None
         del old
         try:
             import gc
@@ -808,10 +885,6 @@ class Renderer:
             self._style_mode = self.apply_style(job)
         width, height, steps = spec["width"], spec["height"], spec["steps"]
 
-        # Nothing is handed to the model but the prompt and the noise its seed
-        # names. Every operation starts directly at its own native resolution.
-        latents = seeded_latents(self.pipe, spec, job.get("seed", 0), self._dtype)
-
         def decoding():
             if on_phase is not None:
                 on_phase("decoding")
@@ -835,12 +908,23 @@ class Renderer:
             height=height,
             width=width,
             generator=self.seed_generator(job.get("seed", 0)),
-            latents=latents,
             callback_on_step_end=watch,
         )
-        if prompt_embeds is None:
-            pipeline_args["negative_prompt"] = job.get("negativePrompt", "")
-        image = self.pipe(**pipeline_args).images[0]
+        editing = edit_spec(job)
+        if editing:
+            source, mask = prepare_edit_images(
+                job.get("_editSource", b""), job.get("_editMask"),
+                mode=editing["mode"], width=width, height=height,
+            )
+            pipeline_args.update(image=source, mask_image=mask, strength=editing["strength"])
+            image = self.edit_pipeline()(**pipeline_args).images[0]
+        else:
+            # Ordinary generation starts from portable CPU-seeded noise.
+            pipeline_args["latents"] = seeded_latents(
+                self.pipe, spec, job.get("seed", 0), self._dtype)
+            if prompt_embeds is None:
+                pipeline_args["negative_prompt"] = job.get("negativePrompt", "")
+            image = self.pipe(**pipeline_args).images[0]
 
         if watch.broken:
             raise _Nonsense()

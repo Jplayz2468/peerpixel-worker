@@ -28,7 +28,7 @@ from .system_status import SystemStatus
 #: bytes over the socket. It adds explicit worker consent for private jobs and
 #: hides job content in the official worker interface. Older installs stay
 #: connected but ineligible until they update.
-PROTOCOL_VERSION = 13
+PROTOCOL_VERSION = 14
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2
@@ -226,6 +226,7 @@ def run(renderer, once: bool = False) -> int:
 
     url = (config.API.replace("http", "ws", 1)
            + f"/api/device/connect?protocol={PROTOCOL_VERSION}"
+           + f"&edit={1 if getattr(renderer, 'supports_editing', False) else 0}"
            + f"&version={updater.installed()}")
     headers = {"authorization": f"Bearer {saved['token']}", "user-agent": api.USER_AGENT}
     backoff = RECONNECT_MIN
@@ -424,9 +425,14 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                             "attestations": [{"operation": "upscale",
                                 "inputDigest": hashlib.sha256(source).hexdigest(),
                                 "outputDigest": hashlib.sha256(jpeg).hexdigest(),
-                                "runtimeVersion": "peerpixel-worker/0.12.0"}]}
+                                "runtimeVersion": "peerpixel-worker/0.14.0"}]}
             elif hasattr(renderer, "generate_job"):
-                jpeg, evidence = renderer.generate_job(job, **render_options)
+                render_job = job
+                if job.get("editMode"):
+                    render_job = {**job, "_editSource": api.edit_asset(job["id"], "source")}
+                    if job.get("hasMask"):
+                        render_job["_editMask"] = api.edit_asset(job["id"], "mask")
+                jpeg, evidence = renderer.generate_job(render_job, **render_options)
             else:  # small test doubles and third-party renderer integrations
                 jpeg = renderer.render(job, **render_options)
                 evidence = {
