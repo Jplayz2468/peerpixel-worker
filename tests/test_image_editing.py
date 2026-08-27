@@ -13,6 +13,14 @@ def png(mode="RGBA", color=(0, 0, 0, 0), size=(8, 6)):
 
 
 class EditContractTests(unittest.TestCase):
+    def test_inpaint_pipeline_vae_is_restored_to_the_renderer_dtype(self):
+        class Vae:
+            def __init__(self): self.dtype = None
+            def to(self, *, dtype): self.dtype = dtype; return self
+        pipe = type("EditPipe", (), {"vae": Vae()})()
+        self.assertIs(render.align_edit_vae(pipe, "bfloat16"), pipe)
+        self.assertEqual(pipe.vae.dtype, "bfloat16")
+
     def test_variation_has_a_restrained_strength_and_needs_a_source(self):
         self.assertEqual(render.edit_spec({
             "editMode": "vary", "editStrength": .25, "sourceImageId": "source",

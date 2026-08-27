@@ -453,6 +453,12 @@ def prepare_edit_images(source_bytes: bytes, mask_bytes: bytes | None, *,
     return source, mask
 
 
+def align_edit_vae(edit_pipe, dtype):
+    """`from_pipe` recreates Klein's VAE in float32; match its image input."""
+    edit_pipe.vae.to(dtype=dtype)
+    return edit_pipe
+
+
 def latent_grid(pipe, pixels: int) -> int:
     """How many latent positions a side of `pixels` becomes.
 
@@ -584,7 +590,7 @@ class Renderer:
             raise RuntimeError("editing_requires_cuda")
         if self._edit_pipe is None:
             from diffusers import Flux2KleinInpaintPipeline
-            self._edit_pipe = Flux2KleinInpaintPipeline.from_pipe(self.pipe)
+            self._edit_pipe = align_edit_vae(Flux2KleinInpaintPipeline.from_pipe(self.pipe), self._dtype)
             self._edit_pipe.set_progress_bar_config(disable=True)
         return self._edit_pipe
 
