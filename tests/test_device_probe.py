@@ -88,7 +88,8 @@ class DeviceProbeTests(unittest.TestCase):
             name="NVIDIA GeForce RTX 4080",
             memory=RuntimeError("CUDA error: out of memory"),
         ))
-        device, _, label, total = render.pick_device()
+        with patch("peerpixel.render.subprocess.run", side_effect=OSError("nvidia-smi unavailable")):
+            device, _, label, total = render.pick_device()
         self.assertEqual(device, "cuda")
         self.assertEqual(label, "NVIDIA GeForce RTX 4080 (size unknown)")
         self.assertEqual(total, 0)
@@ -98,7 +99,8 @@ class DeviceProbeTests(unittest.TestCase):
             name=RuntimeError("CUDA error: out of memory"),
             memory=RuntimeError("CUDA error: out of memory"),
         ))
-        device, _, label, _ = render.pick_device()
+        with patch("peerpixel.render.subprocess.run", side_effect=OSError("nvidia-smi unavailable")):
+            device, _, label, _ = render.pick_device()
         self.assertEqual(device, "cuda")
         self.assertEqual(label, "NVIDIA GPU (size unknown)")
 
@@ -110,7 +112,8 @@ class DeviceProbeTests(unittest.TestCase):
     def test_describing_the_accelerator_never_raises(self):
         self.install(FakeCuda(
             name=RuntimeError("boom"), memory=RuntimeError("boom")))
-        self.assertEqual(render.describe_accelerator(), "NVIDIA GPU (size unknown)")
+        with patch("peerpixel.render.subprocess.run", side_effect=OSError("nvidia-smi unavailable")):
+            self.assertEqual(render.describe_accelerator(), "NVIDIA GPU (size unknown)")
 
         sys.modules["torch"] = None   # an import that yields nothing usable
         self.assertEqual(render.describe_accelerator(), "unknown")
