@@ -632,6 +632,8 @@ def run(renderer, once: bool = False) -> int:
                         link.send(json.dumps({"type": "heartbeat"}))
                         continue
                     message = json.loads(raw) if isinstance(raw, str) else {}
+                    if handle_idle_control(message):
+                        continue
                     if message.get("type") != "task":
                         continue
                     task = message.get("task") or {}
