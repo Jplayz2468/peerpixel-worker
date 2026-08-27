@@ -411,7 +411,7 @@ EDIT_STRENGTHS = {
     # The coordinator owns product tuning. Workers enforce only a broad safety
     # envelope so strength changes do not require a fleet update.
     "vary": (0.15, 0.95, 0.65),
-    "refine": (0.30, 0.30, 0.30),
+    "refine": (0.35, 0.75, 0.55),
     "inpaint": (0.35, 0.85, 0.65),
 }
 
@@ -459,6 +459,13 @@ def prepare_edit_images(source_bytes: bytes, mask_bytes: bytes | None, *,
     if mask.getbbox() is None:
         raise ValueError("edit_mask_empty")
     return source, mask
+
+
+def encode_jpeg(image) -> bytes:
+    """Encode final downloads without throwing away chroma or fine texture."""
+    output = io.BytesIO()
+    image.convert("RGB").save(output, "JPEG", quality=95, subsampling=0, optimize=True)
+    return output.getvalue()
 
 
 def align_edit_vae(edit_pipe, dtype):
@@ -954,6 +961,4 @@ class Renderer:
         if watch.broken:
             raise _Nonsense()
 
-        buffer = io.BytesIO()
-        image.save(buffer, "JPEG", quality=92)
-        return buffer.getvalue()
+        return encode_jpeg(image)

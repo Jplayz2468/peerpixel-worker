@@ -27,11 +27,11 @@ class DiscordActionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "untrusted_generation_spec"):
                 render.operation_of({"operation": "vary", **bad})
 
-    def test_refine_is_source_conditioned_at_fixed_strength(self):
-        self.assertEqual(render.edit_spec({"editMode": "refine", "editStrength": .30,
-                         "sourceImageId": "image-1"}), {"mode": "refine", "strength": .30})
+    def test_refine_uses_coordinator_denoise_inside_a_detail_safe_envelope(self):
+        self.assertEqual(render.edit_spec({"editMode": "refine", "editStrength": .55,
+                         "sourceImageId": "image-1"}), {"mode": "refine", "strength": .55})
         with self.assertRaises(ValueError):
-            render.edit_spec({"editMode": "refine", "editStrength": .31,
+            render.edit_spec({"editMode": "refine", "editStrength": .76,
                               "sourceImageId": "image-1"})
 
 

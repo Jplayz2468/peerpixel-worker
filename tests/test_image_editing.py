@@ -1,7 +1,7 @@
 import io
 import unittest
 
-from PIL import Image
+from PIL import Image, JpegImagePlugin
 
 from peerpixel import render
 
@@ -13,6 +13,11 @@ def png(mode="RGBA", color=(0, 0, 0, 0), size=(8, 6)):
 
 
 class EditContractTests(unittest.TestCase):
+    def test_final_jpeg_preserves_detail_with_full_chroma_sampling(self):
+        encoded = render.encode_jpeg(Image.new("RGB", (64, 64), "purple"))
+        image = Image.open(io.BytesIO(encoded))
+        self.assertEqual(JpegImagePlugin.get_sampling(image), 0)
+
     def test_inpaint_pipeline_vae_is_restored_to_the_renderer_dtype(self):
         class Vae:
             def __init__(self): self.dtype = None
