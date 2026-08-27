@@ -7,7 +7,7 @@ Workers can advertise two capabilities:
 - Prompt enhancement with Qwen. The coordinator favors an idle CUDA worker that already has the enhancer loaded when it is close to the fastest option, and prefers weaker rendering GPUs among otherwise similar choices.
 - Image rendering with FLUX. The coordinator sends the enhanced prompt to the fastest available compatible renderer. The renderer also runs its local Falconsai safety classifier before uploading the result for authoritative server moderation.
 
-AuraSR, browser editing, inpainting, probes, reputation checks, and distributed verification are not part of the protocol. Discord generation uses four 512-scale, 16-step images. Its U buttons refine a selected source at 1024-scale/50 steps with strength 0.30; V buttons create four source-conditioned alternatives at strength 0.45.
+AuraSR, browser editing, inpainting, probes, reputation checks, and distributed verification are not part of the protocol. Discord generation uses four 512-scale, 16-step images, which the worker uploads both as selectable source cells and as one labeled 2×2 display grid. Its U buttons refine a selected source at 1024-scale/50 steps with strength 0.30; V buttons create four more distinct source-conditioned alternatives at strength 0.65.
 
 ## Install
 

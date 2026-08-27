@@ -23,8 +23,8 @@ class EditContractTests(unittest.TestCase):
 
     def test_variation_has_a_restrained_strength_and_needs_a_source(self):
         self.assertEqual(render.edit_spec({
-            "editMode": "vary", "editStrength": .25, "sourceImageId": "source",
-        }), {"mode": "vary", "strength": .25})
+            "editMode": "vary", "editStrength": .65, "sourceImageId": "source",
+        }), {"mode": "vary", "strength": .65})
         with self.assertRaisesRegex(ValueError, "edit_source_required"):
             render.edit_spec({"editMode": "vary", "editStrength": .25})
         with self.assertRaisesRegex(ValueError, "invalid_edit_strength"):

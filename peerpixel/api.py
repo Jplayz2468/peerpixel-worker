@@ -78,14 +78,22 @@ def source_image(path: str, *, device_id: str, assignment_token: str) -> bytes:
         raise ApiError(error.code, "source_image_failed") from None
 
 
-def submit_discord_result(job: dict, device_id: str, images: list[tuple[bytes, dict]]) -> dict:
-    payload = {"jobId": job["id"], "deviceId": device_id,
-               "assignmentToken": job["assignmentToken"], "images": [{
+def _upload_image(image: bytes, evidence: dict) -> dict:
+    return {
         "imageBase64": base64.b64encode(image).decode(), "contentType": "image/jpeg",
         "localSafety": {"label": "nsfw" if evidence.get("moderation", {}).get("label") == "nsfw" else "normal",
                         "unsafe": evidence.get("moderation", {}).get("label") == "nsfw",
                         "score": float(evidence.get("moderation", {}).get("nsfwScore", 0.0) or 0.0)},
-    } for image, evidence in images]}
+    }
+
+
+def submit_discord_result(job: dict, device_id: str, images: list[tuple[bytes, dict]],
+                          grid: tuple[bytes, dict] | None = None) -> dict:
+    payload = {"jobId": job["id"], "deviceId": device_id,
+               "assignmentToken": job["assignmentToken"],
+               "images": [_upload_image(image, evidence) for image, evidence in images]}
+    if grid is not None:
+        payload["grid"] = _upload_image(*grid)
     return _call("/api/worker/result", method="POST", payload=payload, timeout=600)
 
 

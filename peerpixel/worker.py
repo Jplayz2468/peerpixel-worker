@@ -506,6 +506,30 @@ def _action_seeds(seed: int, count: int) -> list[int]:
     return result
 
 
+def compose_grid(cells: list[bytes]) -> bytes:
+    """Compose four selectable JPEG cells into the Discord display artifact."""
+    if len(cells) != 4:
+        raise ValueError("grid_requires_four_cells")
+    import io
+    from PIL import Image, ImageDraw
+
+    decoded = [Image.open(io.BytesIO(cell)).convert("RGB") for cell in cells]
+    width, height = decoded[0].size
+    if any(image.size != (width, height) for image in decoded):
+        raise ValueError("grid_cell_size_mismatch")
+    grid = Image.new("RGB", (width * 2, height * 2), "black")
+    draw = ImageDraw.Draw(grid)
+    for index, image in enumerate(decoded):
+        left = (index % 2) * width
+        top = (index // 2) * height
+        grid.paste(image, (left, top))
+        draw.rectangle((left + 10, top + 10, left + 42, top + 42), fill="black")
+        draw.text((left + 22, top + 15), str(index + 1), fill="white", anchor="ma")
+    output = io.BytesIO()
+    grid.save(output, "JPEG", quality=92)
+    return output.getvalue()
+
+
 def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     token = task["assignmentToken"]
     stage = task["stage"]
@@ -545,12 +569,19 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         completed_steps += int(task.get("steps", 1))
     link.send(json.dumps({"type": "task_result", "taskId": task["id"],
         "stage": "render", "assignmentToken": token, "resultId": task["id"]}))
+    grid = None
+    if len(rendered) == 4:
+        scores = [float(item[1]["moderation"].get("nsfwScore", 0.0) or 0.0) for item in rendered]
+        unsafe = any(item[1]["moderation"].get("label") == "nsfw" for item in rendered)
+        grid = (compose_grid([item[0] for item in rendered]), {"moderation": {
+            "label": "nsfw" if unsafe else "normal", "nsfwScore": max(scores, default=0.0),
+        }})
     # The socket result creates the upload lease. A very short retry handles
     # propagation without ever accepting a stale assignment.
     last_error = None
     for attempt in range(5):
         try:
-            api.submit_discord_result(task, device_id, rendered)
+            api.submit_discord_result(task, device_id, rendered, grid)
             return
         except api.ApiError as error:
             last_error = error
