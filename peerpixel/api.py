@@ -89,6 +89,18 @@ def submit_discord_result(job: dict, device_id: str, images: list[tuple[bytes, d
     return _call("/api/worker/result", method="POST", payload=payload, timeout=600)
 
 
+def report_discord_result_failure(job: dict, device_id: str, reason: str) -> dict:
+    """End an upload lease after the rendered bytes could not be delivered.
+
+    The coordinator refunds the creator and must not schedule another render
+    for an image that was already computed successfully.
+    """
+    return _call("/api/worker/result-failed", method="POST", payload={
+        "jobId": job["id"], "deviceId": device_id,
+        "assignmentToken": job["assignmentToken"], "reason": str(reason)[:120],
+    }, timeout=120)
+
+
 def verify_asset(check_id: str, which: str) -> bytes:
     """One of the two pictures a check compares. Raw bytes, not JSON."""
     import urllib.request

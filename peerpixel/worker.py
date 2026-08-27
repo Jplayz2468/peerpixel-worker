@@ -547,14 +547,25 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         "stage": "render", "assignmentToken": token, "resultId": task["id"]}))
     # The socket result creates the upload lease. A very short retry handles
     # propagation without ever accepting a stale assignment.
+    last_error = None
     for attempt in range(5):
         try:
             api.submit_discord_result(task, device_id, rendered)
             return
         except api.ApiError as error:
-            if error.status != 409 or attempt == 4:
-                raise
+            last_error = error
+            if error.status != 409 and error.status < 500:
+                break
+            if attempt == 4:
+                break
             time.sleep(0.25 * (attempt + 1))
+        except Exception as error:  # transient transport failure; keep rendered bytes in memory
+            last_error = error
+            if attempt == 4:
+                break
+            time.sleep(0.25 * (attempt + 1))
+    reason = last_error.code if isinstance(last_error, api.ApiError) else type(last_error).__name__
+    api.report_discord_result_failure(task, device_id, reason)
 
 
 def run(renderer, once: bool = False) -> int:
