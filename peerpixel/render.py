@@ -402,7 +402,7 @@ def operation_of(job: dict) -> dict:
 
 
 EDIT_STRENGTHS = {
-    "vary": (0.15, 0.65, 0.65),
+    "vary": (0.15, 0.80, 0.80),
     "refine": (0.30, 0.30, 0.30),
     "inpaint": (0.35, 0.85, 0.65),
 }
