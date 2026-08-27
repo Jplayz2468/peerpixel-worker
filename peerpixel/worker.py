@@ -526,7 +526,9 @@ def compose_grid(cells: list[bytes]) -> bytes:
         draw.rectangle((left + 10, top + 10, left + 42, top + 42), fill="black")
         draw.text((left + 22, top + 15), str(index + 1), fill="white", anchor="ma")
     output = io.BytesIO()
-    grid.save(output, "JPEG", quality=92)
+    # Discord serves the uploaded attachment as the downloadable original.
+    # Preserve fine texture and text edges during the one unavoidable composite encode.
+    grid.save(output, "JPEG", quality=95, subsampling=0, optimize=True)
     return output.getvalue()
 
 

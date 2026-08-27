@@ -2,7 +2,7 @@ import unittest
 import io
 from unittest import mock
 
-from PIL import Image
+from PIL import Image, JpegImagePlugin
 
 from peerpixel import api, worker
 
@@ -30,13 +30,22 @@ class DiscordUploadTests(unittest.TestCase):
         cells = []
         for color in ("red", "green", "blue", "yellow"):
             output = io.BytesIO()
-            Image.new("RGB", (32, 24), color).save(output, "JPEG")
+            Image.new("RGB", (512, 512), color).save(output, "JPEG")
             cells.append(output.getvalue())
 
         grid = worker.compose_grid(cells)
 
         image = Image.open(io.BytesIO(grid))
-        self.assertEqual(image.size, (64, 48))
+        self.assertEqual(image.size, (1024, 1024))
+        self.assertEqual(image.format, "JPEG")
+        self.assertEqual(JpegImagePlugin.get_sampling(image), 0)
+
+    def test_composite_keeps_a_1024_pixel_long_edge_for_supported_aspects(self):
+        for cell_size, expected in (((408, 512), (816, 1024)), ((512, 408), (1024, 816))):
+            output = io.BytesIO()
+            Image.new("RGB", cell_size, "navy").save(output, "JPEG")
+            image = Image.open(io.BytesIO(worker.compose_grid([output.getvalue()] * 4)))
+            self.assertEqual(image.size, expected)
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")
