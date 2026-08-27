@@ -357,11 +357,9 @@ def _quieten() -> None:
 def operation_of(job: dict) -> dict:
     """What to render, from the operation and the parts of the payload it trusts.
 
-    A job may not talk the worker into an unpriced resolution or step count.
-    Masters and exact verification work use the trusted aspect-ratio set;
-    everything else uses its single table entry. Guidance is taken from the
-    payload when it is given and sane, because it costs nothing extra and being
-    able to retune it from the server is worth more than pinning it.
+    A job may not talk the worker beyond bounded resolution or step budgets.
+    The coordinator owns ordinary Discord tuning inside those envelopes.
+    Masters and exact verification work retain their fixed trusted contract.
     """
     name = job.get("operation", "master")
     spec = OPERATIONS.get(name)
@@ -370,9 +368,12 @@ def operation_of(job: dict) -> dict:
     if name in ("grid", "vary", "refine"):
         width = int(job.get("width", spec["width"]))
         height = int(job.get("height", spec["height"]))
-        allowed = {(512, 512), (408, 512), (512, 408)} if name != "refine" else {
-            (1024, 1024), (816, 1024), (1024, 816)}
-        if (width, height) not in allowed or int(job.get("steps", spec["steps"])) != spec["steps"]:
+        steps = int(job.get("steps", spec["steps"]))
+        max_side, max_pixels, min_side, step_range = ((1024, 1024 * 1024, 512, (20, 60))
+            if name == "refine" else (512, 512 * 512, 256, (8, 32)))
+        if (width % 8 or height % 8 or min(width, height) < min_side
+                or max(width, height) > max_side or width * height > max_pixels
+                or not step_range[0] <= steps <= step_range[1]):
             raise ValueError("untrusted_generation_spec")
     elif name in ("master", "verify"):
         width = int(job.get("width", spec["width"]))
@@ -385,6 +386,10 @@ def operation_of(job: dict) -> dict:
             asked = job.get(axis)
             if asked is not None and int(asked) != spec[axis]:
                 raise ValueError(f"{name} is {spec[axis]}px, not {asked}px")
+        steps = spec["steps"]
+
+    if name in ("master", "verify"):
+        steps = spec["steps"]
 
     guidance = spec["guidance"]
     asked = job.get("guidance")
@@ -398,11 +403,14 @@ def operation_of(job: dict) -> dict:
             guidance = asked
     if job.get("editMode") and name not in ("master", "vary", "refine"):
         raise ValueError("editing_not_allowed")
-    return {"name": name, **spec, "width": width, "height": height, "guidance": guidance}
+    return {"name": name, **spec, "width": width, "height": height,
+            "steps": steps, "guidance": guidance}
 
 
 EDIT_STRENGTHS = {
-    "vary": (0.15, 0.80, 0.80),
+    # The coordinator owns product tuning. Workers enforce only a broad safety
+    # envelope so strength changes do not require a fleet update.
+    "vary": (0.15, 0.95, 0.65),
     "refine": (0.30, 0.30, 0.30),
     "inpaint": (0.35, 0.85, 0.65),
 }

@@ -21,15 +21,16 @@ class EditContractTests(unittest.TestCase):
         self.assertIs(render.align_edit_vae(pipe, "bfloat16"), pipe)
         self.assertEqual(pipe.vae.dtype, "bfloat16")
 
-    def test_variation_has_a_restrained_strength_and_needs_a_source(self):
-        self.assertEqual(render.edit_spec({
-            "editMode": "vary", "editStrength": .65, "sourceImageId": "source",
-        }), {"mode": "vary", "strength": .65})
+    def test_variation_accepts_coordinator_tuning_inside_a_safe_envelope(self):
+        for strength in (.20, .80, .95):
+            self.assertEqual(render.edit_spec({
+                "editMode": "vary", "editStrength": strength, "sourceImageId": "source",
+            }), {"mode": "vary", "strength": strength})
         with self.assertRaisesRegex(ValueError, "edit_source_required"):
             render.edit_spec({"editMode": "vary", "editStrength": .25})
         with self.assertRaisesRegex(ValueError, "invalid_edit_strength"):
             render.edit_spec({
-                "editMode": "vary", "editStrength": .8, "sourceImageId": "source",
+                "editMode": "vary", "editStrength": .96, "sourceImageId": "source",
             })
 
     def test_inpaint_requires_a_mask_while_vary_builds_a_full_white_mask(self):
