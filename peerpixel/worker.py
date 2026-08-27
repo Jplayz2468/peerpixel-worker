@@ -201,7 +201,7 @@ def run(renderer, once: bool = False) -> int:
     saved = config.read()
     config.write(stopAfterJob=False)
     if not saved.get("token"):
-        raise SystemExit("this machine is not paired yet - run: peerpixel pair CODE")
+        raise SystemExit("this machine needs a permanent worker key from a PeerPixel moderator")
 
     try:
         from websockets.sync.client import connect
@@ -490,3 +490,119 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
     step_line(True, f"{operation} done in {clock(took)}",
               f"+{earned:g} px" if earned else "no payout")
     return earned
+
+
+# Discord-first protocol. Kept at the bottom so installations updating across
+# the clean-slate release resolve this implementation without a second entrypoint.
+def _action_seeds(seed: int, count: int) -> list[int]:
+    state = int(seed) & 0xffffffff or 0x9e3779b9
+    result = []
+    for _ in range(count):
+        state ^= (state << 13) & 0xffffffff
+        state ^= state >> 17
+        state ^= (state << 5) & 0xffffffff
+        state &= 0xffffffff
+        result.append(state)
+    return result
+
+
+def _discord_task(link, task: dict, renderer, device_id: str) -> None:
+    token = task["assignmentToken"]
+    stage = task["stage"]
+    if stage == "enhance":
+        from .prompt_enhancer import PromptEnhancer
+        enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer()
+        renderer._enhancer = enhancer
+        pair = enhancer.enhance_pair(task["prompt"], "auto")
+        link.send(json.dumps({"type": "task_result", "taskId": task["id"],
+            "stage": "enhance", "assignmentToken": token, "prompt": pair["prompt"],
+            "provenance": "qwen"}))
+        return
+
+    from .safety import SafetyClassifier
+    source = None
+    if task.get("sourceUrl"):
+        source = api.source_image(task["sourceUrl"], device_id=device_id,
+                                  assignment_token=token)
+    seeds = _action_seeds(task.get("seed", 0), int(task.get("outputCount", 1)))
+    safety = getattr(renderer, "_safety", None) or SafetyClassifier()
+    renderer._safety = safety
+    rendered = []
+    total_steps = max(1, int(task.get("steps", 1)) * len(seeds))
+    completed_steps = 0
+    for seed in seeds:
+        job = {**task, "seed": seed, "operation": task.get("operation", "grid"),
+               "enhance": False, "enhancedPrompt": task["prompt"]}
+        if source is not None:
+            job.update(editMode=task["operation"], editStrength=task["strength"],
+                       sourceImageId=task.get("sourceImageId"), _editSource=source)
+        def progress(done, _total, offset=completed_steps):
+            link.send(json.dumps({"type": "progress", "taskId": task["id"],
+                "stage": "render", "assignmentToken": token,
+                "progress": min(1.0, (offset + done) / total_steps)}))
+        image = renderer.render(job, on_step=progress)
+        rendered.append((image, {"moderation": safety.classify(image)}))
+        completed_steps += int(task.get("steps", 1))
+    link.send(json.dumps({"type": "task_result", "taskId": task["id"],
+        "stage": "render", "assignmentToken": token, "resultId": task["id"]}))
+    # The socket result creates the upload lease. A very short retry handles
+    # propagation without ever accepting a stale assignment.
+    for attempt in range(5):
+        try:
+            api.submit_discord_result(task, device_id, rendered)
+            return
+        except api.ApiError as error:
+            if error.status != 409 or attempt == 4:
+                raise
+            time.sleep(0.25 * (attempt + 1))
+
+
+def run(renderer, once: bool = False) -> int:
+    """Serve the compact Discord-first enhancement/render protocol."""
+    from urllib.parse import quote
+    saved = config.read()
+    if not saved.get("token") or not saved.get("deviceId"):
+        raise SystemExit("this worker needs the permanent key and device ID supplied by a PeerPixel admin")
+    try:
+        from websockets.sync.client import connect
+    except ImportError:
+        raise SystemExit("missing dependency: run `peerpixel setup`") from None
+    capabilities = quote(json.dumps({"enhance": True, "render": True}, separators=(",", ":")))
+    url = (config.API.replace("http", "ws", 1) + "/api/worker/connect"
+           + f"?deviceId={quote(str(saved['deviceId']))}&capabilities={capabilities}"
+           + f"&accelerator={quote(str(saved.get('accelerator', 'unknown')))}&enhancerLoaded=0"
+           + f"&renderEstimateMs={int(saved.get('benchMs') or 0)}")
+    headers = {"authorization": f"Bearer {saved['token']}", "user-agent": api.USER_AGENT}
+    completed = 0
+    backoff = RECONNECT_MIN
+    while True:
+        try:
+            with connect(url, additional_headers=headers, max_size=None, ping_interval=None,
+                         close_timeout=5) as link:
+                backoff = RECONNECT_MIN
+                step_line(True, f"Connected to {config.API}", saved.get("accelerator", "worker"))
+                while True:
+                    try:
+                        raw = link.recv(timeout=HEARTBEAT_SECONDS)
+                    except TimeoutError:
+                        link.send(json.dumps({"type": "heartbeat"}))
+                        continue
+                    message = json.loads(raw) if isinstance(raw, str) else {}
+                    if message.get("type") != "task":
+                        continue
+                    task = message.get("task") or {}
+                    try:
+                        _discord_task(link, task, renderer, str(saved["deviceId"]))
+                        completed += 1
+                    except Exception as error:  # one failed task must not kill the worker
+                        link.send(json.dumps({"type": "task_failed", "taskId": task.get("id"),
+                            "stage": task.get("stage"), "assignmentToken": task.get("assignmentToken"),
+                            "reason": str(error)[:200]}))
+                    if once:
+                        return completed
+        except KeyboardInterrupt:
+            return completed
+        except Exception as error:
+            say(f"  {DIM}disconnected ({error}) - retrying in {backoff}s{OFF}")
+            time.sleep(backoff)
+            backoff = min(RECONNECT_MAX, int(backoff * 1.8) or 2)

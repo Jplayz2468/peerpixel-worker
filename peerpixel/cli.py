@@ -151,14 +151,14 @@ def pair_machine(code: str) -> dict:
     import socket
 
     name = describe_accelerator()
-    result = api.pair(code.strip().upper(), {
-        "name": socket.gethostname(),
-        "platform": f"{platform.system().lower()}-{platform.machine()}",
-        "accelerator": name,
-    })
-    config.write(deviceId=result["deviceId"], token=result["token"],
-                 accelerator=name)
-    return result
+    import hashlib
+    token = code.strip()
+    if len(token) < 16:
+        raise RuntimeError("ask a PeerPixel moderator for a permanent worker key")
+    device_id = "dev_" + hashlib.sha256(
+        f"{socket.gethostname()}:{platform.node()}".encode()).hexdigest()[:16]
+    config.write(deviceId=device_id, token=token, accelerator=name)
+    return {"deviceId": device_id}
 
 
 # -- the guide ----------------------------------------------------------------
@@ -218,7 +218,7 @@ PAIRING = """A machine has to belong to an account, so the pixels it earns have
 somewhere to go.
 
   1. Open  https://peerpixel.cc/app  and sign in
-  2. Go to Contribute and press "Get a pairing code"
+  2. Ask a PeerPixel moderator for a permanent worker key
   3. Type the code here"""
 
 
@@ -227,12 +227,12 @@ def pair_interactively(interactive: bool) -> bool:
     block(PAIRING)
     say()
     if not interactive:
-        problem("Not paired. Run: peerpixel pair CODE")
+        problem("Not bound. Ask a PeerPixel moderator for a permanent worker key.")
         return False
     while True:
         code = ask("Pairing code:")
         if not code:
-            note("Skipped. Run `peerpixel pair CODE` when you have one.")
+            note("Skipped. Run `peerpixel pair KEY` after a moderator gives you one.")
             return False
         try:
             result = pair_machine(code)
@@ -393,7 +393,7 @@ def cmd_status(_argv: list[str]) -> None:
     step_line(where["libraries"], "Rendering libraries")
     step_line(where["model"], "The model")
     step_line(where["paired"], "Paired",
-              saved.get("deviceId", "") if where["paired"] else "run: peerpixel pair CODE")
+              saved.get("deviceId", "") if where["paired"] else "ask a moderator for a worker key")
     step_line(where["approved"], "Speed check",
               f"{saved.get('benchMs', 0) / 1000:.1f}s" if saved.get("benchMs") else "")
     warning = generation_warning(saved.get("benchMs", 0), saved.get("accelerator", "")) \
@@ -484,7 +484,7 @@ def cmd_licenses(_argv: list[str]) -> None:
 HELP = (
     ("peerpixel", "update, set up if needed, then render until stopped"),
     ("peerpixel setup", "the guided first run, on its own"),
-    ("peerpixel pair CODE", "link this machine to your account"),
+    ("peerpixel pair KEY", "save the permanent key issued by a moderator"),
     ("peerpixel download", "fetch the model ahead of time"),
     ("peerpixel bench", "time this machine against the admission limit"),
     ("peerpixel status", "this machine, and the state of the pool"),

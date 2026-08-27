@@ -7,7 +7,7 @@ Workers can advertise two capabilities:
 - Prompt enhancement with Qwen. The coordinator favors an idle CUDA worker that already has the enhancer loaded when it is close to the fastest option, and prefers weaker rendering GPUs among otherwise similar choices.
 - Image rendering with FLUX. The coordinator sends the enhanced prompt to the fastest available compatible renderer. The renderer also runs its local Falconsai safety classifier before uploading the result for authoritative server moderation.
 
-AuraSR upscaling, remix, variation, img2img, inpainting, probes, reputation checks, and distributed verification are no longer part of the protocol.
+AuraSR, browser editing, inpainting, probes, reputation checks, and distributed verification are not part of the protocol. Discord generation uses four 512-scale, 16-step images. Its U buttons refine a selected source at 1024-scale/50 steps with strength 0.30; V buttons create four source-conditioned alternatives at strength 0.45.
 
 ## Install
 
@@ -43,7 +43,7 @@ peerpixel update      install the newest GitHub release
 
 ## Protocol
 
-Each worker connection is authenticated by its permanent key and registers its accelerator, enhancement/render capabilities, loaded-model state, and timing estimates. One connection performs one task at a time.
+Only a moderator can issue a permanent worker key. Save it once with `peerpixel pair KEY`; there is no public or automatic pairing flow. Each connection registers its accelerator, enhancement/render capabilities, loaded-model state, and timing estimates. One connection performs one task at a time.
 
 Enhancement tasks receive prompt work only and return an enhanced prompt with minimal provenance. Render tasks receive the final enhanced prompt and must not enhance it again. Every task includes an assignment token; stale or mismatched results are rejected. A render is complete only after its upload passes byte validation, worker safety evidence, authoritative server moderation, R2 persistence, and D1 persistence.
 

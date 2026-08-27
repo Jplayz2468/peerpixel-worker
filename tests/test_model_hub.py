@@ -8,7 +8,7 @@ from peerpixel import model_hub
 
 class ModelHubTests(unittest.TestCase):
     def test_every_auxiliary_model_is_revision_pinned_on_hugging_face(self):
-        self.assertEqual(set(model_hub.MODELS), {"qwen3-1.7b", "nsfw-image-detection", "aurasr-v2"})
+        self.assertEqual(set(model_hub.MODELS), {"qwen3-1.7b", "nsfw-image-detection"})
         for repo, revision in model_hub.MODELS.values():
             self.assertIn("/", repo)
             self.assertRegex(revision, r"^[0-9a-f]{40}$")
@@ -28,10 +28,10 @@ class ModelHubTests(unittest.TestCase):
         with mock.patch("huggingface_hub.snapshot_download", side_effect=[
             LocalEntryNotFoundError("not cached"), "/hf/cache/downloaded",
         ]) as download:
-            self.assertEqual(model_hub.ensure("aurasr-v2"), "/hf/cache/downloaded")
+            self.assertEqual(model_hub.ensure("qwen3-1.7b"), "/hf/cache/downloaded")
         self.assertEqual(download.call_args_list[1], mock.call(
-            repo_id="fal/AuraSR-v2",
-            revision=model_hub.MODELS["aurasr-v2"][1],
+            repo_id="Qwen/Qwen3-1.7B",
+            revision=model_hub.MODELS["qwen3-1.7b"][1],
             max_workers=4,
         ))
 

@@ -10,10 +10,6 @@ MODELS = {
         "Falconsai/nsfw_image_detection",
         "04367978d3474804ab1a00a9bd6548b741764069",
     ),
-    "aurasr-v2": (
-        "fal/AuraSR-v2",
-        "ff452185a7c8b51206dd62c21c292e7baad5c3a3",
-    ),
 }
 
 

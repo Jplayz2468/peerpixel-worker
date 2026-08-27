@@ -71,6 +71,9 @@ GUIDANCE = 4.0
 #: checkpoint was chosen to get away from.
 GUIDANCE_RANGE = (1.5, 12.0)
 OPERATIONS = {
+    "grid": {"width": 512, "height": 512, "steps": 16, "guidance": GUIDANCE},
+    "vary": {"width": 512, "height": 512, "steps": 16, "guidance": GUIDANCE},
+    "refine": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
     # Public generation is one native full-size render.
     "master": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
     # A check is a master rendered a second time on a machine the operator
@@ -104,7 +107,7 @@ TRUSTED_MASTER_SIZES = frozenset({
 
 #: What may arrive over the wire. `bench` is local, and a job claiming to be one
 #: would be four steps of work submitted for a fifty-step price.
-NETWORK_OPERATIONS = ("master", "verify", "probe")
+NETWORK_OPERATIONS = ("grid", "vary", "refine", "master", "verify", "probe")
 MANIFEST_VERSION = "2026-08-23.1"
 STYLE_RECIPES = {
     name: (f"{name}-v2", ()) for name in (
@@ -364,7 +367,14 @@ def operation_of(job: dict) -> dict:
     spec = OPERATIONS.get(name)
     if spec is None:
         raise ValueError(f"unknown operation: {name}")
-    if name in ("master", "verify"):
+    if name in ("grid", "vary", "refine"):
+        width = int(job.get("width", spec["width"]))
+        height = int(job.get("height", spec["height"]))
+        allowed = {(512, 512), (408, 512), (512, 408)} if name != "refine" else {
+            (1024, 1024), (816, 1024), (1024, 816)}
+        if (width, height) not in allowed or int(job.get("steps", spec["steps"])) != spec["steps"]:
+            raise ValueError("untrusted_generation_spec")
+    elif name in ("master", "verify"):
         width = int(job.get("width", spec["width"]))
         height = int(job.get("height", spec["height"]))
         if (width, height) not in TRUSTED_MASTER_SIZES:
@@ -386,13 +396,14 @@ def operation_of(job: dict) -> dict:
         low, high = GUIDANCE_RANGE
         if asked is not None and low <= asked <= high:
             guidance = asked
-    if job.get("editMode") and name != "master":
-        raise ValueError("editing_is_master_only")
+    if job.get("editMode") and name not in ("master", "vary", "refine"):
+        raise ValueError("editing_not_allowed")
     return {"name": name, **spec, "width": width, "height": height, "guidance": guidance}
 
 
 EDIT_STRENGTHS = {
     "vary": (0.15, 0.45, 0.25),
+    "refine": (0.30, 0.30, 0.30),
     "inpaint": (0.35, 0.85, 0.65),
 }
 
@@ -427,7 +438,7 @@ def prepare_edit_images(source_bytes: bytes, mask_bytes: bytes | None, *,
         source = source.resize((width, height), Image.Resampling.LANCZOS)
     except Exception as error:
         raise ValueError("invalid_edit_source") from error
-    if mode == "vary":
+    if mode in ("vary", "refine"):
         return source, Image.new("L", (width, height), 255)
     if not mask_bytes:
         raise ValueError("edit_mask_required")

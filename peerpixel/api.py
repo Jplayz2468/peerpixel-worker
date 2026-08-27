@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+import base64
 
 from . import config
 
@@ -62,6 +63,30 @@ def submit_bench(ms: int, accelerator: str) -> dict:
 
 def submit_result(job_id: str, frame: bytes) -> dict:
     return _call(f"/api/device/job/{job_id}/result", method="POST", raw=frame, timeout=300)
+
+
+def source_image(path: str, *, device_id: str, assignment_token: str) -> bytes:
+    token = config.read().get("token", "")
+    request = urllib.request.Request(
+        f"{config.API}{path}", headers={"user-agent": USER_AGENT,
+        "authorization": f"Bearer {token}", "x-peerpixel-device": device_id,
+        "x-peerpixel-assignment": assignment_token})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        raise ApiError(error.code, "source_image_failed") from None
+
+
+def submit_discord_result(job: dict, device_id: str, images: list[tuple[bytes, dict]]) -> dict:
+    payload = {"jobId": job["id"], "deviceId": device_id,
+               "assignmentToken": job["assignmentToken"], "images": [{
+        "imageBase64": base64.b64encode(image).decode(), "contentType": "image/jpeg",
+        "localSafety": {"label": "nsfw" if evidence.get("moderation", {}).get("label") == "nsfw" else "normal",
+                        "unsafe": evidence.get("moderation", {}).get("label") == "nsfw",
+                        "score": float(evidence.get("moderation", {}).get("nsfwScore", 0.0) or 0.0)},
+    } for image, evidence in images]}
+    return _call("/api/worker/result", method="POST", payload=payload, timeout=600)
 
 
 def verify_asset(check_id: str, which: str) -> bytes:
