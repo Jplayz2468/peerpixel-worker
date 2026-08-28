@@ -262,6 +262,7 @@ def _is_inside(path: Path, directory: Path) -> bool:
 
 
 def run_training(lease: TrainingLease, *, train_backend: Callable | None = None,
+                 progress: Callable | None = None,
                  created_at: str | None = None) -> TrainingReport:
     """Train one lease into an inactive, atomically staged candidate.
 
@@ -292,7 +293,8 @@ def run_training(lease: TrainingLease, *, train_backend: Callable | None = None,
     partial.mkdir(parents=True)
 
     backend = train_backend or _train_with_trl
-    metrics = backend(lease, snapshot.training, snapshot.evaluation, partial)
+    metrics = backend(lease, snapshot.training, snapshot.evaluation, partial) if train_backend else backend(
+        lease, snapshot.training, snapshot.evaluation, partial, progress=progress)
     if metrics is None:
         metrics = {}
     if not isinstance(metrics, Mapping):
@@ -331,13 +333,13 @@ def run_training(lease: TrainingLease, *, train_backend: Callable | None = None,
 
 
 def _train_with_trl(lease: TrainingLease, rows: list[dict], _evaluation_rows: list[dict],
-                    output_dir: Path) -> dict:
+                    output_dir: Path, progress: Callable | None = None) -> dict:
     """Run the optional GPU backend, importing its dependencies only on use."""
     try:
         import torch
         from datasets import Dataset
         from peft import PeftModel
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
         from trl import DPOConfig, DPOTrainer
         from trl.trainer.dpo_trainer import DataCollatorForPreference
     except ImportError as error:
@@ -439,6 +441,12 @@ def _train_with_trl(lease: TrainingLease, rows: list[dict], _evaluation_rows: li
         processing_class=tokenizer,
         data_collator=WeightedPreferenceCollator(
             pad_token_id=tokenizer.pad_token_id),
+        callbacks=[type("ProgressCallback", (TrainerCallback,), {
+            "on_step_end": lambda self, args, state, control, **kwargs: (
+                progress(int(state.global_step), int(state.max_steps))
+                if progress and (int(state.global_step) % 5 == 0 or state.global_step == state.max_steps) else None
+            ) or control,
+        })()],
     )
     result = trainer.train()
     model.set_adapter("default")
@@ -533,6 +541,12 @@ class TrainingHttpClient:
                 "snapshotDigest": lease.snapshot_digest,
             }, timeout=120)
 
+    def report_progress(self, lease: TrainingLease, step: int, total: int, eta_seconds: float) -> dict:
+        return api._call(f"/api/worker/training/progress/{lease.run_id}", method="POST", payload={
+            "deviceId": lease.device_id, "leaseToken": lease.lease_token,
+            "step": step, "total": total, "etaSeconds": max(0, round(eta_seconds)),
+        }, timeout=30)
+
 
 class TrainerCapability:
     """A disabled-by-default lease poller for an explicitly opted-in owner PC.
@@ -617,7 +631,12 @@ class TrainerCapability:
             if self.on_training_start is not None:
                 self.on_training_start()
             training_started = True
-            report = run_training(lease, train_backend=self.train_backend)
+            started = self.now()
+            def progress(step, total):
+                elapsed = max(0.001, self.now() - started)
+                eta = (elapsed / max(1, step)) * max(0, total - step)
+                self.client.report_progress(lease, step, total, eta)
+            report = run_training(lease, train_backend=self.train_backend, progress=progress)
             response = self.client.upload_candidate(lease, report.artifact_path, report) or {}
             if response.get("promoted") and self.on_promoted is not None:
                 self.on_promoted(report.artifact_path, response)
