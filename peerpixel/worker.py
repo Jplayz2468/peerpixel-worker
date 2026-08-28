@@ -760,6 +760,7 @@ def run(renderer, once: bool = False, trainer_capability=None) -> int:
     url = (config.API.replace("http", "ws", 1) + "/api/worker/connect"
            + f"?deviceId={quote(str(saved['deviceId']))}&capabilities={capabilities}"
            + f"&accelerator={quote(str(saved.get('accelerator', 'unknown')))}&enhancerLoaded=0"
+           + f"&version={quote(updater.installed())}"
            + f"&renderEstimateMs={int(saved.get('benchMs') or 0)}")
     headers = {"authorization": f"Bearer {saved['token']}", "user-agent": api.USER_AGENT}
     completed = 0
