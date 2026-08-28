@@ -15,6 +15,7 @@ import base64
 import hashlib
 import json
 import time
+import urllib.request
 
 from . import api, compare, config, console, plans, relay, settings, updater
 from .console import DIM, OFF, clock, say, step_line
@@ -696,7 +697,6 @@ def handle_bootstrap_signal(message: dict, saved: dict) -> bool:
     """Register the trainer's validated local bootstrap artifact once."""
     if message.get("type") not in ("welcome", "ack") or message.get("bootstrapRequired") is not True:
         return False
-    import base64
     from pathlib import Path
     from .trainer import package_candidate
     adapter = config.read().get("promptAdapter")
@@ -706,12 +706,19 @@ def handle_bootstrap_signal(message: dict, saved: dict) -> bool:
     try:
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
         artifact = package_candidate(root)
-        api._call("/api/worker/training/bootstrap", method="PUT", payload={
-            "deviceId": str(saved.get("deviceId") or ""), "manifest": manifest,
-            "registrationVersion": str(message.get("bootstrapVersion") or manifest.get("version") or ""),
-            "artifactBase64": base64.b64encode(artifact).decode(),
-            "artifactDigest": hashlib.sha256(artifact).hexdigest(),
-        }, timeout=900)
+        version = str(message.get("bootstrapVersion") or manifest.get("version") or "")
+        token = config.read().get("token", "")
+        request = urllib.request.Request(f"{config.API}/api/worker/training/bootstrap",
+            data=artifact, method="PUT", headers={
+                "user-agent": api.USER_AGENT, "authorization": f"Bearer {token}",
+                "content-type": "application/zip",
+                "x-peerpixel-device": str(saved.get("deviceId") or ""),
+                "x-peerpixel-bootstrap-version": version,
+                "x-peerpixel-artifact-digest": hashlib.sha256(artifact).hexdigest(),
+                "x-peerpixel-manifest": base64.b64encode(json.dumps(manifest, separators=(",", ":")).encode()).decode(),
+            })
+        with urllib.request.urlopen(request, timeout=900):
+            pass
         return True
     except Exception:
         return False
