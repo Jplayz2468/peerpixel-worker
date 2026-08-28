@@ -181,6 +181,15 @@ class ProbeTests(unittest.TestCase):
 
 
 class MasterTests(unittest.TestCase):
+    def test_noise_blend_starts_between_original_and_fresh_seed_without_an_image(self):
+        pipe = FakePipeline()
+        renderer_with(pipe).render({"prompt": "x", "seed": 7, "operation": "vary",
+            "noiseBlendSeed": 19, "noiseBlendStrength": .35})
+        call = pipe.calls[0]
+        self.assertIn("latents", call)
+        self.assertNotIn("image", call)
+        self.assertNotIn("strength", call)
+
     def test_a_final_is_1024px_at_fifty_guided_steps_from_prompt_and_seed(self):
         pipe = FakePipeline()
         renderer_with(pipe).render(

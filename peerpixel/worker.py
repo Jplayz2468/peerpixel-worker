@@ -579,6 +579,54 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         enhancer.unload()
         renderer._enhancer = None
     milestone("loading_flux", .01)
+    if task.get("operation") == "vary_test":
+        from .safety import SafetyClassifier
+        original_seed = int(task.get("seed", 0))
+        varied_seed = _action_seeds(original_seed, 2)[1]
+        safety = getattr(renderer, "_safety", None) or SafetyClassifier()
+        renderer._safety = safety
+        base = {**task, "operation": "grid", "width": 512, "height": 512,
+                "steps": 16, "outputCount": 1, "seed": original_seed, "enhance": False}
+        original = renderer.render(base)
+        milestone("rendering", .25)
+        seed_only = renderer.render({**task, "operation": "vary", "outputCount": 1,
+            "seed": varied_seed, "width": 512, "height": 512, "steps": 16})
+        milestone("rendering", .48)
+        img2img = renderer.render({**task, "operation": "vary", "outputCount": 1,
+            "seed": varied_seed, "width": 512, "height": 512, "steps": 16,
+            "sourceImageId": "benchmark-source", "_editSource": original,
+            "editMode": "vary", "editStrength": .35})
+        milestone("rendering", .72)
+        noise_blend = renderer.render({**task, "operation": "vary", "outputCount": 1,
+            "seed": original_seed, "width": 512, "height": 512, "steps": 16,
+            "noiseBlendSeed": varied_seed, "noiseBlendStrength": .35})
+        images = [original, seed_only, img2img, noise_blend]
+        rendered = [(image, {"moderation": safety.classify(image)}) for image in images]
+        grid = (compose_grid(images), {"moderation": {"label": "normal", "nsfwScore": max(
+            float(item[1]["moderation"].get("nsfwScore", 0) or 0) for item in rendered)}})
+        milestone("uploading", .97)
+        link.send(json.dumps({"type": "task_result", "taskId": task["id"], "stage": "render",
+            "assignmentToken": token, "resultId": task["id"]}))
+        last_error = None
+        for attempt in range(5):
+            try:
+                api.submit_discord_result(task, device_id, rendered, grid)
+                last_error = None
+                break
+            except api.ApiError as error:
+                last_error = error
+                if error.status != 409 and error.status < 500:
+                    break
+            except Exception as error:
+                last_error = error
+            if attempt < 4:
+                time.sleep(.25 * (attempt + 1))
+        if last_error is not None:
+            reason = last_error.code if isinstance(last_error, api.ApiError) else type(last_error).__name__
+            api.report_discord_result_failure(task, device_id, reason)
+            return
+        renderer.unload()
+        return
     if task.get("operation") == "upscale_test":
         from .safety import SafetyClassifier
         import time as _time

@@ -972,8 +972,16 @@ class Renderer:
                 image = self.edit_pipeline()(**pipeline_args).images[0]
         else:
             # Ordinary generation starts from portable CPU-seeded noise.
-            pipeline_args["latents"] = seeded_latents(
-                self.pipe, spec, job.get("seed", 0), self._dtype)
+            latents = seeded_latents(self.pipe, spec, job.get("seed", 0), self._dtype)
+            if job.get("noiseBlendSeed") is not None:
+                try:
+                    amount = max(.05, min(.8, float(job.get("noiseBlendStrength", .35))))
+                except (TypeError, ValueError):
+                    amount = .35
+                fresh = seeded_latents(self.pipe, spec, job["noiseBlendSeed"], self._dtype)
+                # Keep unit variance while interpolating the original and fresh noise fields.
+                latents = ((1 - amount) * latents + amount * fresh) / (((1 - amount) ** 2 + amount ** 2) ** .5)
+            pipeline_args["latents"] = latents
             if prompt_embeds is None:
                 pipeline_args["negative_prompt"] = job.get("negativePrompt", "")
             image = self.pipe(**pipeline_args).images[0]

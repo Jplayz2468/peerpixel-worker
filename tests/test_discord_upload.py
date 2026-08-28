@@ -135,6 +135,31 @@ class DiscordUploadTests(unittest.TestCase):
         self.assertEqual(len(cells), 4)
         self.assertIsNotNone(grid)
 
+    @mock.patch("peerpixel.safety.SafetyClassifier")
+    @mock.patch.object(api, "submit_discord_result")
+    def test_vary_benchmark_compares_seed_img2img_and_noise_blend(self, submit, safety_type):
+        renderer = self.renderer()
+        output = io.BytesIO()
+        Image.new("RGB", (512, 512), "blue").save(output, "JPEG")
+        renderer.render.return_value = output.getvalue()
+        renderer._safety = None
+        safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
+        task = {**self.task(), "operation": "vary_test", "outputCount": 4,
+                "width": 512, "height": 512, "steps": 16}
+
+        worker._discord_task(Link(), task, renderer, "device")
+
+        jobs = [call.args[0] for call in renderer.render.call_args_list]
+        self.assertEqual([job["operation"] for job in jobs], ["grid", "vary", "vary", "vary"])
+        self.assertNotEqual(jobs[0]["seed"], jobs[1]["seed"])
+        self.assertEqual(jobs[2]["editMode"], "vary")
+        self.assertEqual(jobs[3]["seed"], jobs[0]["seed"])
+        self.assertEqual(jobs[3]["noiseBlendSeed"], jobs[1]["seed"])
+        self.assertAlmostEqual(jobs[3]["noiseBlendStrength"], .35)
+        cells, grid = submit.call_args.args[2:4]
+        self.assertEqual(len(cells), 4)
+        self.assertIsNotNone(grid)
+
     def test_composite_keeps_a_1024_pixel_long_edge_for_supported_aspects(self):
         for cell_size, expected in (((408, 512), (816, 1024)), ((512, 408), (1024, 816))):
             output = io.BytesIO()
