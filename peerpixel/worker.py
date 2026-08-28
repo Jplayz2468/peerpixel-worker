@@ -573,12 +573,11 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
                                   assignment_token=token)
     output_count = int(task.get("outputCount", 1))
     supplied_seeds = task.get("seeds")
-    if (task.get("operation") == "grid" and isinstance(supplied_seeds, list)
+    if (task.get("operation") in ("grid", "vary") and isinstance(supplied_seeds, list)
             and len(supplied_seeds) == output_count):
         seeds = [int(seed) for seed in supplied_seeds]
     elif output_count == 4:
-        # Variations intentionally hold latent noise constant so their prompt
-        # exploration is the only variable the user compares.
+        # Compatibility fallback for coordinators that predate explicit seeds.
         seeds = [int(task.get("seed", 0))] * output_count
     else:
         seeds = _action_seeds(task.get("seed", 0), output_count)

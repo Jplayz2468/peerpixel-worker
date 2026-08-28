@@ -72,7 +72,7 @@ class DiscordUploadTests(unittest.TestCase):
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")
-    def test_variations_share_the_seed_and_upscale_runs_true_50_step_refinement(self, submit, safety_type):
+    def test_variations_use_supplied_seeds_and_upscale_runs_true_50_step_refinement(self, submit, safety_type):
         renderer = self.renderer()
         output = io.BytesIO()
         Image.new("RGB", (16, 16), "blue").save(output, "JPEG")
@@ -80,11 +80,10 @@ class DiscordUploadTests(unittest.TestCase):
         renderer._safety = None
         safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
         vary = {**self.task(), "operation": "vary", "outputCount": 4,
-                "prompts": ["one", "two", "three", "four"], "strength": .88,
-                "sourceUrl": "/source", "sourceImageId": "image"}
-        with mock.patch.object(api, "source_image", return_value=b"source"):
-            worker._discord_task(Link(), vary, renderer, "device")
-        self.assertEqual({call.args[0]["seed"] for call in renderer.render.call_args_list}, {7})
+                "prompts": ["one", "two", "three", "four"], "strength": .55,
+                "seeds": [11, 22, 33, 44]}
+        worker._discord_task(Link(), vary, renderer, "device")
+        self.assertEqual([call.args[0]["seed"] for call in renderer.render.call_args_list], [11, 22, 33, 44])
 
         renderer.reset_mock()
         refine = {**self.task(), "operation": "refine", "width": 1024, "height": 1024,

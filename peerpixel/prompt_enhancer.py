@@ -343,7 +343,10 @@ class PromptEnhancer:
         width = inputs.input_ids.shape[-1]
         visible_text = requested_visible_text(prompt)
         pairs = []
-        base_seed = sampling_seed(prompt, mode)
+        try:
+            base_seed = int(policy["seed"]) & 0x7fffffff
+        except (KeyError, TypeError, ValueError):
+            base_seed = sampling_seed(prompt, mode)
         for index, temperature in enumerate(temperatures):
             with torch.random.fork_rng():
                 torch.manual_seed(base_seed + index * 104729)
