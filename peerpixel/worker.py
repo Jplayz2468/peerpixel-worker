@@ -667,11 +667,16 @@ def build_trainer_capability(saved: dict, renderer, *, client=None):
     )
 
 
-def poll_trainer_when_idle(link, trainer_capability) -> bool:
-    """Poll one training lease before sending the ordinary idle heartbeat."""
-    handled = trainer_capability.poll_when_idle()
+def send_idle_heartbeat(link) -> None:
+    """Keep the existing socket alive without creating an HTTP request."""
     link.send(json.dumps({"type": "heartbeat"}))
-    return handled
+
+
+def handle_training_signal(message: dict, trainer_capability) -> bool:
+    """Claim training only after the coordinator says a queued run exists."""
+    if message.get("type") not in ("welcome", "ack") or message.get("trainingAvailable") is not True:
+        return False
+    return trainer_capability.poll_when_idle()
 
 
 def run(renderer, once: bool = False, trainer_capability=None) -> int:
@@ -706,10 +711,12 @@ def run(renderer, once: bool = False, trainer_capability=None) -> int:
                     try:
                         raw = link.recv(timeout=HEARTBEAT_SECONDS)
                     except TimeoutError:
-                        poll_trainer_when_idle(link, trainer_capability)
+                        send_idle_heartbeat(link)
                         continue
                     message = json.loads(raw) if isinstance(raw, str) else {}
                     if handle_idle_control(message):
+                        continue
+                    if handle_training_signal(message, trainer_capability):
                         continue
                     if message.get("type") != "task":
                         continue

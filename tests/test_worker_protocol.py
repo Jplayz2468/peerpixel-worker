@@ -155,14 +155,27 @@ class ProtocolVersionTests(unittest.TestCase):
         self.assertEqual(disabled.capabilities, ())
         self.assertEqual(enabled.capabilities, ("train",))
 
-    def test_idle_tick_polls_training_before_heartbeat(self):
+    def test_idle_tick_sends_only_a_websocket_heartbeat(self):
         events = []
         capability = mock.Mock()
         capability.poll_when_idle.side_effect = lambda: events.append("poll") or True
         link = mock.Mock()
         link.send.side_effect = lambda payload: events.append(json.loads(payload)["type"])
-        self.assertTrue(worker.poll_trainer_when_idle(link, capability))
-        self.assertEqual(events, ["poll", "heartbeat"])
+        worker.send_idle_heartbeat(link)
+        self.assertEqual(events, ["heartbeat"])
+        capability.poll_when_idle.assert_not_called()
+
+    def test_training_is_polled_only_when_the_coordinator_signals_work(self):
+        capability = mock.Mock()
+        capability.poll_when_idle.return_value = True
+        self.assertTrue(worker.handle_training_signal(
+            {"type": "ack", "trainingAvailable": True}, capability))
+        capability.poll_when_idle.assert_called_once_with()
+
+        capability.reset_mock()
+        self.assertFalse(worker.handle_training_signal(
+            {"type": "ack"}, capability))
+        capability.poll_when_idle.assert_not_called()
 
 
 class SocketResultTests(unittest.TestCase):
