@@ -143,7 +143,7 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertEqual(parsed["prompt"], "First sentence. Second sentence!")
 
     def test_exact_prompt_instruction_and_bypass_paths(self):
-        self.assertIn('exactly one string field: "prompt"', SYSTEM_INSTRUCTION)
+        self.assertIn('exactly two string fields: "prompt" and "negative_prompt"', SYSTEM_INSTRUCTION)
         enhancer = PromptEnhancer()
         bypassed = enhancer.enhance(" raw prompt ", "photoreal", enabled=False)
         self.assertTrue(bypassed.startswith("raw prompt,"))

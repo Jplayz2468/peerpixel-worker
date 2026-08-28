@@ -45,7 +45,7 @@ class PerRowTemperature:
         return scores / scale
 
 SYSTEM_INSTRUCTION = """You are an expert prompt optimizer for FLUX image models.
-Output ONLY one valid compact JSON object with exactly one string field: "prompt". No markdown, preamble, negative prompt, or additional keys. Write the prompt as 1–2 dense sentences of concrete image-model instructions.
+Output ONLY one valid compact JSON object with exactly two string fields: "prompt" and "negative_prompt". No markdown, preamble, or additional keys. Write the prompt as 1–2 dense sentences of concrete image-model instructions. Write negative_prompt as a concise comma-separated list of concrete visual defects or unwanted elements specifically relevant to this image; never negate requested subjects or visible text.
 
 Behavior:
 - If the user's prompt is simple, short, or underspecified: invent a coherent, original visual concept rather than only decorating the given words. Describe literal, externally visible facts: the subject's complete appearance or design, clothing and accessories when applicable, exact action or pose, setting and background elements, spatial composition, lighting direction and quality, weather or time, colors, materials, and surface textures. Make bold but plausible visual choices that turn inputs such as "a man" into a fully specified scene. Do not merely restate the subject and append the style directive.
@@ -240,7 +240,7 @@ def enhancement_messages(prompt: str, style: str) -> list[dict[str, str]]:
         {"role": "user", "content": (
             f"{chosen}\nUser prompt: {prompt.strip()}\n" +
             text_instruction +
-            "Do not output a negative prompt; it is added deterministically after generation.\n"
+            "Output an aligned negative_prompt for this exact image concept.\n"
             f"Never introduce anything contradicted by these exclusions: {template}\n"
             "FINAL AND HIGHEST-PRIORITY REQUIREMENT:\n" + style_instruction
         )},
