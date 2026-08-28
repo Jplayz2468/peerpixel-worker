@@ -9,7 +9,7 @@ from unittest import mock
 from peerpixel.lora_manifest import load_manifest, write_manifest
 from peerpixel.trainer import (
     TrainerCapability, TrainingHttpClient, TrainingLease, TrainingReport,
-    package_candidate,
+    package_candidate, run_training,
 )
 
 
@@ -93,6 +93,27 @@ class FakeTrainingClient:
 
 
 class TrainerLifecycleTests(unittest.TestCase):
+    def test_retry_replaces_only_an_incomplete_staging_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            body = snapshot()
+            lease = TrainingLease.from_payload(
+                lease_payload(body), expected_device_id="owner-device", now=1_000.0,
+            ).bind_local(body, active_adapter=active_adapter(root), staging_root=root / "staged")
+            partial = root / "staged" / "preference-0001.partial"
+            partial.mkdir(parents=True)
+            (partial / "stale").write_text("failed attempt")
+
+            def backend(_lease, _rows, _evaluation, output_dir):
+                (Path(output_dir) / "adapter_model.safetensors").write_bytes(b"candidate")
+                return {"trainLoss": 0.2, "steps": 1}
+
+            report = run_training(lease, train_backend=backend)
+
+            self.assertEqual(report.status, "staged")
+            self.assertFalse(partial.exists())
+            self.assertTrue((root / "staged" / "preference-0001").is_dir())
+
     def test_capability_is_disabled_by_default_and_never_polls_when_busy(self):
         client = FakeTrainingClient()
         capability = TrainerCapability(client, device_id="owner-device")

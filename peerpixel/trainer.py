@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import shutil
 import threading
 import urllib.error
 import urllib.request
@@ -284,8 +285,10 @@ def run_training(lease: TrainingLease, *, train_backend: Callable | None = None,
     candidate = staging / lease.candidate_version
     if _is_inside(partial, active) or _is_inside(candidate, active):
         raise TrainingError("staging_overlaps_active_adapter")
-    if partial.exists() or candidate.exists():
+    if candidate.exists():
         raise FileExistsError("refusing to overwrite a trainer artifact")
+    if partial.exists():
+        shutil.rmtree(partial)
     partial.mkdir(parents=True)
 
     backend = train_backend or _train_with_trl
