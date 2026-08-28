@@ -275,6 +275,30 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertIn("charcoal and graphite", result["prompt"])
         self.assertIn("Required style directive:", calls[0][1]["content"])
 
+    def test_enhance_pairs_returns_one_model_owned_negative_per_positive(self):
+        enhancer = PromptEnhancer()
+        enhancer.warm = lambda: None
+        calls = []
+        def generate(_messages, **options):
+            calls.append(options)
+            index = len(calls)
+            return (
+                f'{{"style":"cinematic","prompt":"positive {index}",'
+                f'"negative_prompt":"negative {index}"}}'
+            )
+        enhancer._generate_text = generate
+
+        pairs = enhancer.enhance_pairs(
+            "city", "auto", count=4,
+            sampling={"temperatures": [0.4, 0.6, 0.8, 1.0],
+                      "topP": 0.92, "repetitionPenalty": 1.08},
+        )
+
+        self.assertEqual([pair["negativePrompt"] for pair in pairs],
+                         ["negative 1", "negative 2", "negative 3", "negative 4"])
+        self.assertEqual([call["temperature"] for call in calls], [0.4, 0.6, 0.8, 1.0])
+        self.assertEqual(len({call["seed"] for call in calls}), 4)
+
     def test_all_seven_styles_have_distinct_prompt_directives(self):
         expected = {"photoreal", "anime", "vector", "cinematic", "watercolor",
                     "illustration", "pixel_art"}

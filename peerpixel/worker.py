@@ -539,9 +539,16 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         from .prompt_enhancer import PromptEnhancer
         enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer()
         renderer._enhancer = enhancer
-        pair = enhancer.enhance_pair(task["prompt"], "auto")
+        pairs = enhancer.enhance_pairs(
+            task["prompt"], "auto", count=int(task.get("count", 1)),
+            sampling=task.get("sampling") or {},
+        )
         link.send(json.dumps({"type": "task_result", "taskId": task["id"],
-            "stage": "enhance", "assignmentToken": token, "prompt": pair["prompt"],
+            "stage": "enhance", "assignmentToken": token,
+            "prompt": pairs[0]["prompt"],
+            "negativePrompt": pairs[0]["negativePrompt"],
+            "prompts": [pair["prompt"] for pair in pairs],
+            "negativePrompts": [pair["negativePrompt"] for pair in pairs],
             "provenance": "qwen"}))
         return
 
@@ -551,14 +558,25 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         source = api.source_image(task["sourceUrl"], device_id=device_id,
                                   assignment_token=token)
     seeds = _action_seeds(task.get("seed", 0), int(task.get("outputCount", 1)))
+    prompts = task.get("prompts")
+    negative_prompts = task.get("negativePrompts")
+    if prompts is not None or negative_prompts is not None:
+        if (not isinstance(prompts, list) or not isinstance(negative_prompts, list)
+                or len(prompts) != len(seeds) or len(negative_prompts) != len(seeds)
+                or any(not str(value).strip() for value in prompts + negative_prompts)):
+            raise ValueError("prompt_pair_count_mismatch")
     safety = getattr(renderer, "_safety", None) or SafetyClassifier()
     renderer._safety = safety
     rendered = []
     total_steps = max(1, int(task.get("steps", 1)) * len(seeds))
     completed_steps = 0
-    for seed in seeds:
+    for index, seed in enumerate(seeds):
+        positive = str(prompts[index] if prompts is not None else task["prompt"]).strip()
+        negative = str(negative_prompts[index] if negative_prompts is not None
+                       else task.get("negativePrompt") or "").strip()
         job = {**task, "seed": seed, "operation": task.get("operation", "grid"),
-               "enhance": False, "enhancedPrompt": task["prompt"]}
+               "prompt": positive, "negativePrompt": negative,
+               "enhance": False, "enhancedPrompt": positive}
         if source is not None:
             job.update(editMode=task["operation"], editStrength=task["strength"],
                        sourceImageId=task.get("sourceImageId"), _editSource=source)

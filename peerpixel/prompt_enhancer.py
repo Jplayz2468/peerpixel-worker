@@ -313,6 +313,27 @@ class PromptEnhancer:
                 parsed["negativePrompt"] = str(resolved_negative).strip()
         return parsed
 
+    def enhance_pairs(self, prompt: str, style: str, *, count: int,
+                      sampling: dict | None = None) -> list[dict[str, str]]:
+        if count < 1:
+            raise ValueError("prompt_pair_count_invalid")
+        options = sampling or {}
+        temperatures = options.get("temperatures") or []
+        top_p = float(options.get("topP", 0.9))
+        repetition_penalty = float(options.get("repetitionPenalty", 1.05))
+        pairs = []
+        for index in range(count):
+            temperature = float(temperatures[index] if index < len(temperatures) else 0.7)
+            pair = self.enhance_pair(
+                prompt, style, temperature=temperature, top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                seed=sampling_seed(f"{prompt}\0{index}", style),
+            )
+            if not pair.get("prompt") or not pair.get("negativePrompt"):
+                raise RuntimeError("prompt_enhancement_empty")
+            pairs.append(pair)
+        return pairs
+
     def enhance(self, prompt: str, style: str, *, enabled=True, resolved=None) -> str:
         """Compatibility API for callers that only need the positive prompt."""
         return self.enhance_pair(

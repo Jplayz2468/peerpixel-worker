@@ -1,5 +1,6 @@
 import unittest
 import io
+import json
 from unittest import mock
 
 from PIL import Image, JpegImagePlugin
@@ -25,6 +26,61 @@ class DiscordUploadTests(unittest.TestCase):
         renderer = mock.Mock()
         renderer.render.return_value = b"jpeg"
         return renderer
+
+    def test_enhancement_returns_four_aligned_prompt_pairs(self):
+        renderer = self.renderer()
+        renderer._enhancer = mock.Mock()
+        renderer._enhancer.enhance_pairs.return_value = [
+            {"prompt": f"positive {index}", "negativePrompt": f"negative {index}"}
+            for index in range(1, 5)
+        ]
+        link = Link()
+        task = {"id": "job-1", "stage": "enhance", "assignmentToken": "lease-1",
+                "prompt": "city", "count": 4,
+                "sampling": {"temperatures": [0.4, 0.6, 0.8, 1.0]}}
+
+        worker._discord_task(link, task, renderer, "device")
+
+        result = json.loads(link.sent[-1])
+        self.assertEqual(result["prompts"],
+                         ["positive 1", "positive 2", "positive 3", "positive 4"])
+        self.assertEqual(result["negativePrompts"],
+                         ["negative 1", "negative 2", "negative 3", "negative 4"])
+
+    @mock.patch("peerpixel.safety.SafetyClassifier")
+    @mock.patch.object(api, "submit_discord_result")
+    def test_render_indexes_positive_and_negative_arrays_together(self, _submit, safety_type):
+        safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
+        renderer = self.renderer()
+        output = io.BytesIO()
+        Image.new("RGB", (32, 24), "purple").save(output, "JPEG")
+        renderer.render.return_value = output.getvalue()
+        renderer._safety = None
+        task = {**self.task(), "outputCount": 4,
+                "prompts": [f"positive {index}" for index in range(1, 5)],
+                "negativePrompts": [f"negative {index}" for index in range(1, 5)]}
+
+        worker._discord_task(Link(), task, renderer, "device")
+
+        jobs = [call.args[0] for call in renderer.render.call_args_list]
+        self.assertEqual([(job["prompt"], job["negativePrompt"]) for job in jobs], [
+            ("positive 1", "negative 1"), ("positive 2", "negative 2"),
+            ("positive 3", "negative 3"), ("positive 4", "negative 4"),
+        ])
+
+    @mock.patch("peerpixel.safety.SafetyClassifier")
+    @mock.patch.object(api, "submit_discord_result")
+    def test_single_render_uses_scalar_prompt_pair(self, _submit, safety_type):
+        safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
+        renderer = self.renderer()
+        renderer._safety = None
+        task = {**self.task(), "negativePrompt": "negative fox"}
+
+        worker._discord_task(Link(), task, renderer, "device")
+
+        job = renderer.render.call_args.args[0]
+        self.assertEqual((job["prompt"], job["negativePrompt"]),
+                         ("a fox", "negative fox"))
 
     def test_four_cells_are_composed_into_one_two_by_two_grid(self):
         cells = []
