@@ -635,7 +635,11 @@ class TrainerCapability:
             raise
         except Exception as error:
             if lease is not None:
-                reason = str(error) if isinstance(error, TrainingError) else "training_failed"
+                if isinstance(error, TrainingError):
+                    reason = str(error)
+                else:
+                    detail = " ".join(str(error).split())[:120]
+                    reason = f"{type(error).__name__}:{detail}" if detail else type(error).__name__
                 self._failure(lease, reason)
             return payload is not None if "payload" in locals() else False
         finally:
