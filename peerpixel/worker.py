@@ -540,9 +540,13 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer(
             adapter_path=config.read().get("promptAdapter"))
         renderer._enhancer = enhancer
-        pair = enhancer.enhance_pair(task["prompt"], "auto")
+        prompts = enhancer.enhance_batch(
+            task["prompt"], count=int(task.get("count", 4)),
+            sampling=task.get("sampling"), mode=task.get("mode", "broad"),
+        )
         link.send(json.dumps({"type": "task_result", "taskId": task["id"],
-            "stage": "enhance", "assignmentToken": token, "prompt": pair["prompt"],
+            "stage": "enhance", "assignmentToken": token, "prompt": prompts[0],
+            "prompts": prompts,
             "provenance": enhancer.provenance}))
         return
 
@@ -551,15 +555,21 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     if task.get("sourceUrl"):
         source = api.source_image(task["sourceUrl"], device_id=device_id,
                                   assignment_token=token)
-    seeds = _action_seeds(task.get("seed", 0), int(task.get("outputCount", 1)))
+    output_count = int(task.get("outputCount", 1))
+    seeds = ([int(task.get("seed", 0))] * output_count if output_count == 4
+             else _action_seeds(task.get("seed", 0), output_count))
+    prompts = task.get("prompts")
+    if not isinstance(prompts, list) or len(prompts) != output_count:
+        prompts = [task["prompt"]] * output_count
     safety = getattr(renderer, "_safety", None) or SafetyClassifier()
     renderer._safety = safety
     rendered = []
     total_steps = max(1, int(task.get("steps", 1)) * len(seeds))
     completed_steps = 0
-    for seed in seeds:
+    for index, seed in enumerate(seeds):
         job = {**task, "seed": seed, "operation": task.get("operation", "grid"),
-               "enhance": False, "enhancedPrompt": task["prompt"]}
+               "prompt": prompts[index], "enhance": False,
+               "enhancedPrompt": prompts[index]}
         if source is not None:
             job.update(editMode=task["operation"], editStrength=task["strength"],
                        sourceImageId=task.get("sourceImageId"), _editSource=source)

@@ -291,6 +291,47 @@ class PromptEnhancer:
         generated = output[0][inputs.input_ids.shape[-1]:]
         return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
+    def enhance_batch(self, prompt: str, *, count: int = 4,
+                      sampling: dict | None = None, mode: str = "broad") -> list[str]:
+        """Explore several prompt directions in one model pass.
+
+        Sampling policy comes from the coordinator, so changing exploration
+        strength never requires updating a worker.
+        """
+        import torch
+
+        count = max(1, min(4, int(count)))
+        policy = sampling or {}
+        temperature = max(0.05, min(2.0, float(policy.get("temperature", 0.9))))
+        top_p = max(0.1, min(1.0, float(policy.get("topP", 0.95))))
+        max_tokens = max(32, min(MAX_NEW_TOKENS, int(policy.get("maxTokens", MAX_NEW_TOKENS))))
+        self.warm()
+        messages = bootstrap_messages(prompt) if self.adapter_path else enhancement_messages(prompt, "auto")
+        text = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+        )
+        inputs = self.tokenizer([text] * count, padding=True, return_tensors="pt").to(self.model.device)
+        with torch.random.fork_rng():
+            torch.manual_seed(sampling_seed(prompt, mode))
+            outputs = self.model.generate(
+                **inputs, max_new_tokens=max_tokens, do_sample=True,
+                temperature=temperature, top_p=top_p,
+            )
+        width = inputs.input_ids.shape[-1]
+        visible_text = requested_visible_text(prompt)
+        prompts = []
+        for output in outputs:
+            generated = self.tokenizer.decode(output[width:], skip_special_tokens=True).strip()
+            invalid = (not generated or generated.startswith(("{", "[", "```"))
+                       or generated.lower().startswith(("here is", "enhanced prompt", "prompt:")))
+            if invalid:
+                generated = prompt.strip()
+            prompts.append(parse_enhancement(
+                generated, fallback_prompt=prompt, fallback_negative=COMMON_NEGATIVE,
+                visible_text=visible_text,
+            )["prompt"])
+        return prompts
+
     def enhance_pair(self, prompt: str, style: str, *, enabled=True, resolved=None,
                      resolved_negative=None) -> dict[str, str]:
         if self.adapter_path and enabled and not resolved:

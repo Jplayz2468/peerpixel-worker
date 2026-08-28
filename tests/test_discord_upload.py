@@ -32,14 +32,29 @@ class DiscordUploadTests(unittest.TestCase):
     def test_enhancement_injects_the_machine_local_adapter(self, _read, enhancer_type):
         renderer = self.renderer()
         renderer._enhancer = None
-        enhancer_type.return_value.enhance_pair.return_value = {
-            "prompt": "A red fox.", "negativePrompt": "blur"}
+        enhancer_type.return_value.enhance_batch.return_value = ["one", "two", "three", "four"]
         enhancer_type.return_value.provenance = "bootstrap-0002"
         link = Link()
-        worker._discord_task(link, {"id": "job", "stage": "enhance",
+        worker._discord_task(link, {"id": "job", "stage": "enhance", "count": 4,
+            "mode": "broad", "sampling": {"temperature": .9},
             "assignmentToken": "lease", "prompt": "fox"}, renderer, "device")
         enhancer_type.assert_called_once_with(adapter_path="/models/bootstrap")
         self.assertEqual(json.loads(link.sent[0])["provenance"], "bootstrap-0002")
+        self.assertEqual(json.loads(link.sent[0])["prompts"], ["one", "two", "three", "four"])
+
+    @mock.patch("peerpixel.safety.SafetyClassifier")
+    @mock.patch.object(api, "submit_discord_result")
+    def test_grid_renders_four_prompts_with_one_shared_seed(self, submit, safety_type):
+        output = io.BytesIO()
+        Image.new("RGB", (16, 16), "blue").save(output, "JPEG")
+        renderer = self.renderer()
+        renderer.render.return_value = output.getvalue()
+        renderer._safety = None
+        safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
+        task = {**self.task(), "outputCount": 4, "prompts": ["one", "two", "three", "four"]}
+        worker._discord_task(Link(), task, renderer, "device")
+        self.assertEqual([call.args[0]["prompt"] for call in renderer.render.call_args_list], task["prompts"])
+        self.assertEqual({call.args[0]["seed"] for call in renderer.render.call_args_list}, {7})
 
     def test_four_cells_are_composed_into_one_two_by_two_grid(self):
         cells = []
