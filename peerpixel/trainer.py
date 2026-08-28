@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -521,15 +522,19 @@ class TrainingHttpClient:
             "manifest": manifest,
             "evaluation": manifest["evaluation"],
         }
-        try:
-            return api._call(
-                f"/api/worker/training/candidate/{lease.run_id}",
-                method="PUT", payload=payload, timeout=900)
-        except api.ApiError as error:
-            # Validation failure is a successfully stored non-promoting rehearsal.
-            if error.status == 422 and error.body.get("accepted"):
-                return error.body
-            raise
+        for attempt in range(3):
+            try:
+                return api._call(
+                    f"/api/worker/training/candidate/{lease.run_id}",
+                    method="PUT", payload=payload, timeout=900)
+            except api.ApiError as error:
+                # Validation failure is a successfully stored non-promoting rehearsal.
+                if error.status == 422 and error.body.get("accepted"):
+                    return error.body
+                if error.status < 500 or attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
+        raise TrainingError("candidate_upload_failed")
 
     def report_training(self, lease: TrainingLease, report: TrainingReport) -> dict:
         return api._call(
@@ -635,7 +640,10 @@ class TrainerCapability:
             def progress(step, total):
                 elapsed = max(0.001, self.now() - started)
                 eta = (elapsed / max(1, step)) * max(0, total - step)
-                self.client.report_progress(lease, step, total, eta)
+                try:
+                    self.client.report_progress(lease, step, total, eta)
+                except Exception:
+                    pass
             report = run_training(lease, train_backend=self.train_backend, progress=progress)
             response = self.client.upload_candidate(lease, report.artifact_path, report) or {}
             if response.get("promoted") and self.on_promoted is not None:
