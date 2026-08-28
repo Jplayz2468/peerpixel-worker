@@ -92,7 +92,7 @@ class ProtocolVersionTests(unittest.TestCase):
     def test_release_contains_model_owned_negative_prompt_conditioning(self):
         root = pathlib.Path(__file__).parents[1]
         metadata = tomllib.loads((root / "pyproject.toml").read_text())
-        self.assertEqual(metadata["project"]["version"], "0.14.12")
+        self.assertEqual(metadata["project"]["version"], "0.14.15")
 
     def test_the_advertised_version_matches_the_sizes_this_install_pins(self):
         """The bump and the sizes have to move together, or neither is safe.
