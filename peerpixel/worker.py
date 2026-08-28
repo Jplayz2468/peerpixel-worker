@@ -535,11 +535,17 @@ def compose_grid(cells: list[bytes]) -> bytes:
 def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     token = task["assignmentToken"]
     stage = task["stage"]
+    def milestone(phase: str, progress: float) -> None:
+        link.send(json.dumps({"type": "progress", "taskId": task["id"],
+            "stage": stage, "assignmentToken": token, "phase": phase,
+            "progress": max(0.0, min(1.0, progress))}))
     if stage == "enhance":
+        milestone("loading_prompt_model", .02)
         from .prompt_enhancer import PromptEnhancer
         enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer(
             adapter_path=config.read().get("promptAdapter"))
         renderer._enhancer = enhancer
+        milestone("exploring_prompts", .12)
         prompts = enhancer.enhance_batch(
             task["prompt"], count=int(task.get("count", 4)),
             sampling=task.get("sampling"), mode=task.get("mode", "broad"),
@@ -551,13 +557,22 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         return
 
     from .safety import SafetyClassifier
+    milestone("loading_flux", .01)
     source = None
     if task.get("sourceUrl"):
         source = api.source_image(task["sourceUrl"], device_id=device_id,
                                   assignment_token=token)
     output_count = int(task.get("outputCount", 1))
-    seeds = ([int(task.get("seed", 0))] * output_count if output_count == 4
-             else _action_seeds(task.get("seed", 0), output_count))
+    supplied_seeds = task.get("seeds")
+    if (task.get("operation") == "grid" and isinstance(supplied_seeds, list)
+            and len(supplied_seeds) == output_count):
+        seeds = [int(seed) for seed in supplied_seeds]
+    elif output_count == 4:
+        # Variations intentionally hold latent noise constant so their prompt
+        # exploration is the only variable the user compares.
+        seeds = [int(task.get("seed", 0))] * output_count
+    else:
+        seeds = _action_seeds(task.get("seed", 0), output_count)
     prompts = task.get("prompts")
     if not isinstance(prompts, list) or len(prompts) != output_count:
         prompts = [task["prompt"]] * output_count
@@ -577,18 +592,24 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
             link.send(json.dumps({"type": "progress", "taskId": task["id"],
                 "stage": "render", "assignmentToken": token,
                 "progress": min(1.0, (offset + done) / total_steps)}))
-        image = renderer.render(job, on_step=progress)
+        def phase(name):
+            mapped = name if name in {"encoding_prompt", "rendering", "decoding"} else "loading_flux"
+            milestone(mapped, min(.9, completed_steps / total_steps + .01))
+        image = renderer.render(job, on_step=progress, on_phase=phase)
+        milestone("safety_check", min(.92, (completed_steps + int(task.get("steps", 1))) / total_steps))
         rendered.append((image, {"moderation": safety.classify(image)}))
         completed_steps += int(task.get("steps", 1))
-    link.send(json.dumps({"type": "task_result", "taskId": task["id"],
-        "stage": "render", "assignmentToken": token, "resultId": task["id"]}))
     grid = None
     if len(rendered) == 4:
+        milestone("composing_grid", .94)
         scores = [float(item[1]["moderation"].get("nsfwScore", 0.0) or 0.0) for item in rendered]
         unsafe = any(item[1]["moderation"].get("label") == "nsfw" for item in rendered)
         grid = (compose_grid([item[0] for item in rendered]), {"moderation": {
             "label": "nsfw" if unsafe else "normal", "nsfwScore": max(scores, default=0.0),
         }})
+    milestone("uploading", .97)
+    link.send(json.dumps({"type": "task_result", "taskId": task["id"],
+        "stage": "render", "assignmentToken": token, "resultId": task["id"]}))
     # The socket result creates the upload lease. A very short retry handles
     # propagation without ever accepting a stale assignment.
     last_error = None

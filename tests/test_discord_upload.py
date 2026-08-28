@@ -39,22 +39,52 @@ class DiscordUploadTests(unittest.TestCase):
             "mode": "broad", "sampling": {"temperature": .9},
             "assignmentToken": "lease", "prompt": "fox"}, renderer, "device")
         enhancer_type.assert_called_once_with(adapter_path="/models/bootstrap")
-        self.assertEqual(json.loads(link.sent[0])["provenance"], "bootstrap-0002")
-        self.assertEqual(json.loads(link.sent[0])["prompts"], ["one", "two", "three", "four"])
+        result = next(json.loads(message) for message in link.sent
+                      if json.loads(message).get("type") == "task_result")
+        self.assertEqual(result["provenance"], "bootstrap-0002")
+        self.assertEqual(result["prompts"], ["one", "two", "three", "four"])
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")
-    def test_grid_renders_four_prompts_with_one_shared_seed(self, submit, safety_type):
+    def test_initial_grid_uses_coordinator_seeds_for_four_prompts(self, submit, safety_type):
         output = io.BytesIO()
         Image.new("RGB", (16, 16), "blue").save(output, "JPEG")
         renderer = self.renderer()
         renderer.render.return_value = output.getvalue()
         renderer._safety = None
         safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
-        task = {**self.task(), "outputCount": 4, "prompts": ["one", "two", "three", "four"]}
+        task = {**self.task(), "outputCount": 4, "prompts": ["one", "two", "three", "four"],
+                "seeds": [11, 22, 33, 44]}
         worker._discord_task(Link(), task, renderer, "device")
         self.assertEqual([call.args[0]["prompt"] for call in renderer.render.call_args_list], task["prompts"])
+        self.assertEqual([call.args[0]["seed"] for call in renderer.render.call_args_list], [11, 22, 33, 44])
+
+    @mock.patch("peerpixel.safety.SafetyClassifier")
+    @mock.patch.object(api, "submit_discord_result")
+    def test_variations_share_the_seed_and_upscale_runs_true_50_step_refinement(self, submit, safety_type):
+        renderer = self.renderer()
+        output = io.BytesIO()
+        Image.new("RGB", (16, 16), "blue").save(output, "JPEG")
+        renderer.render.return_value = output.getvalue()
+        renderer._safety = None
+        safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
+        vary = {**self.task(), "operation": "vary", "outputCount": 4,
+                "prompts": ["one", "two", "three", "four"], "strength": .88,
+                "sourceUrl": "/source", "sourceImageId": "image"}
+        with mock.patch.object(api, "source_image", return_value=b"source"):
+            worker._discord_task(Link(), vary, renderer, "device")
         self.assertEqual({call.args[0]["seed"] for call in renderer.render.call_args_list}, {7})
+
+        renderer.reset_mock()
+        refine = {**self.task(), "operation": "refine", "width": 1024, "height": 1024,
+                  "steps": 50, "strength": .42, "sourceUrl": "/source",
+                  "sourceImageId": "image"}
+        with mock.patch.object(api, "source_image", return_value=b"source"):
+            worker._discord_task(Link(), refine, renderer, "device")
+        job = renderer.render.call_args.args[0]
+        self.assertEqual((job["operation"], job["width"], job["height"], job["steps"]),
+                         ("refine", 1024, 1024, 50))
+        self.assertEqual((job["editStrength"], job["_editSource"]), (.42, b"source"))
 
     def test_four_cells_are_composed_into_one_two_by_two_grid(self):
         cells = []

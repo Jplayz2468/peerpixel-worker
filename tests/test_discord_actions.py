@@ -12,7 +12,7 @@ class DiscordActionTests(unittest.TestCase):
     def test_grid_and_refinement_specs_stay_inside_safe_compute_bounds(self):
         self.assertEqual(render.operation_of({"operation": "grid", "width": 512,
                          "height": 512, "steps": 16})["steps"], 16)
-        self.assertEqual(render.operation_of({"operation": "refine", "width": 816,
+        self.assertEqual(render.operation_of({"operation": "refine", "width": 768,
                          "height": 1024, "steps": 50})["steps"], 50)
         with self.assertRaises(ValueError):
             render.operation_of({"operation": "grid", "width": 1024,
@@ -33,6 +33,9 @@ class DiscordActionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             render.edit_spec({"editMode": "refine", "editStrength": .76,
                               "sourceImageId": "image-1"})
+
+    def test_refine_schedules_fifty_actual_denoising_steps_after_strength_truncation(self):
+        self.assertEqual(render.scheduled_edit_steps(50, .42), 120)
 
 
 if __name__ == "__main__":

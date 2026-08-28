@@ -29,6 +29,21 @@ STYLE_NEGATIVES = {
     "pixel_art": "antialiasing, smooth gradients, vector curves, 3D rendering, inconsistent pixel scale",
 }
 
+
+class PerRowTemperature:
+    """Apply independent sampling temperatures to one batched generation."""
+
+    def __init__(self, temperatures):
+        self.temperatures = [max(0.05, min(2.0, float(value))) for value in temperatures]
+
+    def __call__(self, _input_ids, scores):
+        import torch
+        if scores.shape[0] != len(self.temperatures):
+            raise ValueError("temperature_batch_mismatch")
+        scale = torch.tensor(self.temperatures, device=scores.device,
+                             dtype=scores.dtype).unsqueeze(1)
+        return scores / scale
+
 SYSTEM_INSTRUCTION = """You are an expert prompt optimizer for FLUX image models.
 Output ONLY one valid compact JSON object with exactly one string field: "prompt". No markdown, preamble, negative prompt, or additional keys. Write the prompt as 1–2 dense sentences of concrete image-model instructions.
 
@@ -260,8 +275,10 @@ class PromptEnhancer:
         if self.adapter_path:
             from .lora_manifest import load_manifest
             manifest = load_manifest(self.adapter_path / "manifest.json")
-            if manifest.get("kind") != "bootstrap" or not manifest.get("evaluation", {}).get("passed"):
-                raise ValueError("prompt adapter has not passed bootstrap evaluation")
+            evaluation = manifest.get("evaluation", {})
+            if (manifest.get("kind") not in {"bootstrap", "preference"}
+                    or evaluation.get("passed") is not True):
+                raise ValueError("prompt adapter has not passed evaluation")
             self._adapter_manifest = manifest
         path = self.model_path or model_hub.ensure("qwen3-1.7b")
         self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
@@ -302,11 +319,17 @@ class PromptEnhancer:
 
         count = max(1, min(4, int(count)))
         policy = sampling or {}
-        temperature = max(0.05, min(2.0, float(policy.get("temperature", 0.9))))
+        supplied = policy.get("temperatures", [policy.get("temperature", 0.9)] * count)
+        if not isinstance(supplied, (list, tuple)) or len(supplied) != count:
+            raise ValueError("temperature_batch_mismatch")
+        temperatures = [max(0.05, min(2.0, float(value))) for value in supplied]
         top_p = max(0.1, min(1.0, float(policy.get("topP", 0.95))))
-        max_tokens = max(32, min(MAX_NEW_TOKENS, int(policy.get("maxTokens", MAX_NEW_TOKENS))))
+        max_tokens = max(32, min(MAX_NEW_TOKENS, int(policy.get("maxNewTokens",
+                                                                policy.get("maxTokens", MAX_NEW_TOKENS)))))
         self.warm()
-        messages = bootstrap_messages(prompt) if self.adapter_path else enhancement_messages(prompt, "auto")
+        # The Discord product has one learned contract: raw prompt in, enhanced
+        # prompt out. There is no style classifier or style instruction layer.
+        messages = bootstrap_messages(prompt)
         text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
         )
@@ -315,7 +338,7 @@ class PromptEnhancer:
             torch.manual_seed(sampling_seed(prompt, mode))
             outputs = self.model.generate(
                 **inputs, max_new_tokens=max_tokens, do_sample=True,
-                temperature=temperature, top_p=top_p,
+                logits_processor=[PerRowTemperature(temperatures)], top_p=top_p,
             )
         width = inputs.input_ids.shape[-1]
         visible_text = requested_visible_text(prompt)

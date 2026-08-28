@@ -416,6 +416,12 @@ EDIT_STRENGTHS = {
 }
 
 
+def scheduled_edit_steps(actual_steps: int, strength: float) -> int:
+    """Compensate for img2img strength truncation so requested steps are real."""
+    import math
+    return max(int(actual_steps), int(math.ceil(int(actual_steps) / float(strength))))
+
+
 def edit_spec(job: dict) -> dict | None:
     mode = job.get("editMode")
     if not mode:
@@ -948,7 +954,9 @@ class Renderer:
                 job.get("_editSource", b""), job.get("_editMask"),
                 mode=editing["mode"], width=width, height=height,
             )
-            pipeline_args.update(image=source, mask_image=mask, strength=editing["strength"])
+            pipeline_args.update(image=source, mask_image=mask, strength=editing["strength"],
+                                 num_inference_steps=scheduled_edit_steps(
+                                     steps, editing["strength"]))
             image = self.edit_pipeline()(**pipeline_args).images[0]
         else:
             # Ordinary generation starts from portable CPU-seeded noise.
