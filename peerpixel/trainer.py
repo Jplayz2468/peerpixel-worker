@@ -335,7 +335,8 @@ def _train_with_trl(lease: TrainingLease, rows: list[dict], _evaluation_rows: li
         from datasets import Dataset
         from peft import PeftModel
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        from trl import DataCollatorForPreference, DPOConfig, DPOTrainer
+        from trl import DPOConfig, DPOTrainer
+        from trl.trainer.dpo_trainer import DataCollatorForPreference
     except ImportError as error:
         raise TrainingError("trainer_dependencies_missing") from error
 
