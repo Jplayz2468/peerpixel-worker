@@ -363,12 +363,6 @@ def _train_with_trl(lease: TrainingLease, rows: list[dict], _evaluation_rows: li
         base, str(lease.active_adapter), is_trainable=True,
         local_files_only=True,
     )
-    # A frozen copy of the promoted adapter is the reference while both
-    # adapters share the large immutable base weights.
-    model.load_adapter(
-        str(lease.active_adapter), adapter_name="reference",
-        is_trainable=False,
-    )
     model.set_adapter("default")
     model.config.use_cache = False
 
@@ -445,8 +439,6 @@ def _train_with_trl(lease: TrainingLease, rows: list[dict], _evaluation_rows: li
         processing_class=tokenizer,
         data_collator=WeightedPreferenceCollator(
             pad_token_id=tokenizer.pad_token_id),
-        model_adapter_name="default",
-        ref_adapter_name="reference",
     )
     result = trainer.train()
     model.set_adapter("default")
