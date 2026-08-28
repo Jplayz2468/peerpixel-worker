@@ -513,20 +513,34 @@ class TrainingHttpClient:
         if report.artifact_digest and report.artifact_digest != digest:
             raise TrainingError("artifact_digest_mismatch")
         manifest = json.loads((Path(artifact_path) / "manifest.json").read_text(encoding="utf-8"))
-        payload = {
-            "deviceId": lease.device_id,
-            "leaseToken": lease.lease_token,
-            "snapshotDigest": lease.snapshot_digest,
-            "artifactBase64": base64.b64encode(artifact).decode(),
-            "artifactDigest": digest,
-            "manifest": manifest,
-            "evaluation": manifest["evaluation"],
-        }
         for attempt in range(3):
             try:
-                return api._call(
-                    f"/api/worker/training/candidate/{lease.run_id}",
-                    method="PUT", payload=payload, timeout=900)
+                token = config.read().get("token", "")
+                headers = {
+                    "user-agent": api.USER_AGENT,
+                    "authorization": f"Bearer {token}",
+                    "content-type": "application/zip",
+                    "x-peerpixel-device": lease.device_id,
+                    "x-peerpixel-training-lease": lease.lease_token,
+                    "x-peerpixel-snapshot-digest": lease.snapshot_digest,
+                    "x-peerpixel-artifact-digest": digest,
+                    "x-peerpixel-manifest": base64.b64encode(json.dumps(manifest, separators=(",", ":")).encode()).decode(),
+                    "x-peerpixel-evaluation": base64.b64encode(json.dumps(manifest["evaluation"], separators=(",", ":")).encode()).decode(),
+                }
+                request = urllib.request.Request(
+                    f"{config.API}/api/worker/training/candidate/{lease.run_id}",
+                    data=artifact, headers=headers, method="PUT")
+                with urllib.request.urlopen(request, timeout=900) as response:
+                    return json.loads(response.read().decode() or "{}")
+            except urllib.error.HTTPError as raw_error:
+                try: body = json.loads(raw_error.read().decode() or "{}")
+                except Exception: body = {}
+                error = api.ApiError(raw_error.code, body.get("error", "candidate_upload_failed"), body)
+                if error.status == 422 and error.body.get("accepted"):
+                    return error.body
+                if error.status < 500 or attempt == 2:
+                    raise error
+                time.sleep(2 ** attempt)
             except api.ApiError as error:
                 # Validation failure is a successfully stored non-promoting rehearsal.
                 if error.status == 422 and error.body.get("accepted"):

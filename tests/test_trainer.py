@@ -257,16 +257,17 @@ class TrainingHttpClientTests(unittest.TestCase):
             }, expected_device_id="owner-device", now=1_000.0)
             report = TrainingReport("run-0001", "staged", artifact_path=candidate)
             client = TrainingHttpClient()
-            with mock.patch("peerpixel.trainer.api._call", return_value={
-                    "accepted": True, "promoted": False}) as call:
+            reply = mock.MagicMock()
+            reply.__enter__.return_value.read.return_value = b'{"accepted":true,"promoted":false}'
+            with mock.patch("peerpixel.trainer.urllib.request.urlopen", return_value=reply) as call:
                 response = client.upload_candidate(lease, candidate, report)
             self.assertFalse(response["promoted"])
-            payload = call.call_args.kwargs["payload"]
-            artifact = base64.b64decode(payload["artifactBase64"])
-            self.assertEqual(payload["artifactDigest"], hashlib.sha256(artifact).hexdigest())
-            self.assertEqual(payload["manifest"], manifest)
-            self.assertEqual(payload["evaluation"], manifest["evaluation"])
-            self.assertEqual(payload["leaseToken"], "signed-short-lived-token")
+            request = call.call_args.args[0]
+            self.assertEqual(request.data, package_candidate(candidate))
+            self.assertEqual(request.headers["Content-type"], "application/zip")
+            self.assertEqual(request.headers["X-peerpixel-training-lease"], "signed-short-lived-token")
+            self.assertEqual(request.headers["X-peerpixel-artifact-digest"],
+                             hashlib.sha256(request.data).hexdigest())
 
     def test_lease_and_report_use_the_coordinator_routes(self):
         client = TrainingHttpClient()
