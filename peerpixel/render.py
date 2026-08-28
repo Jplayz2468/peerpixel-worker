@@ -978,6 +978,15 @@ class Renderer:
                     amount = max(.05, min(.8, float(job.get("noiseBlendStrength", .35))))
                 except (TypeError, ValueError):
                     amount = .35
+                base_width = int(job.get("noiseBaseWidth", spec["width"]))
+                base_height = int(job.get("noiseBaseHeight", spec["height"]))
+                if (base_width, base_height) != (spec["width"], spec["height"]):
+                    import torch.nn.functional as functional
+                    base_spec = {**spec, "width": base_width, "height": base_height}
+                    latents = seeded_latents(self.pipe, base_spec, job.get("seed", 0), self._dtype)
+                    latents = functional.interpolate(latents, size=(latent_grid(self.pipe, spec["height"]),
+                        latent_grid(self.pipe, spec["width"])), mode="bilinear", align_corners=False)
+                    latents = latents / latents.float().std().clamp_min(1e-6).to(latents.dtype)
                 fresh = seeded_latents(self.pipe, spec, job["noiseBlendSeed"], self._dtype)
                 # Keep unit variance while interpolating the original and fresh noise fields.
                 latents = ((1 - amount) * latents + amount * fresh) / (((1 - amount) ** 2 + amount ** 2) ** .5)

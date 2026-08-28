@@ -589,18 +589,18 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
                 "steps": 16, "outputCount": 1, "seed": original_seed, "enhance": False}
         original = renderer.render(base)
         milestone("rendering", .25)
-        seed_only = renderer.render({**task, "operation": "vary", "outputCount": 1,
-            "seed": varied_seed, "width": 512, "height": 512, "steps": 16})
+        low = renderer.render({**task, "operation": "vary", "outputCount": 1,
+            "seed": original_seed, "width": 512, "height": 512, "steps": 16,
+            "noiseBlendSeed": varied_seed, "noiseBlendStrength": .20})
         milestone("rendering", .48)
-        img2img = renderer.render({**task, "operation": "vary", "outputCount": 1,
-            "seed": varied_seed, "width": 512, "height": 512, "steps": 16,
-            "sourceImageId": "benchmark-source", "_editSource": original,
-            "editMode": "vary", "editStrength": .35})
-        milestone("rendering", .72)
-        noise_blend = renderer.render({**task, "operation": "vary", "outputCount": 1,
+        medium = renderer.render({**task, "operation": "vary", "outputCount": 1,
             "seed": original_seed, "width": 512, "height": 512, "steps": 16,
             "noiseBlendSeed": varied_seed, "noiseBlendStrength": .35})
-        images = [original, seed_only, img2img, noise_blend]
+        milestone("rendering", .72)
+        high = renderer.render({**task, "operation": "vary", "outputCount": 1,
+            "seed": original_seed, "width": 512, "height": 512, "steps": 16,
+            "noiseBlendSeed": varied_seed, "noiseBlendStrength": .50})
+        images = [original, low, medium, high]
         rendered = [(image, {"moderation": safety.classify(image)}) for image in images]
         grid = (compose_grid(images), {"moderation": {"label": "normal", "nsfwScore": max(
             float(item[1]["moderation"].get("nsfwScore", 0) or 0) for item in rendered)}})
@@ -705,6 +705,11 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         job = {**task, "seed": seed, "operation": task.get("operation", "grid"),
                "prompt": prompts[index], "enhance": False,
                "enhancedPrompt": prompts[index]}
+        if task.get("baseSeed") is not None:
+            job.update(seed=int(task["baseSeed"]), noiseBlendSeed=seed,
+                       noiseBlendStrength=float(task.get("noiseBlendStrength", .35)),
+                       noiseBaseWidth=int(task.get("noiseBaseWidth", task.get("width", 512))),
+                       noiseBaseHeight=int(task.get("noiseBaseHeight", task.get("height", 512))))
         if source is not None:
             job.update(editMode=task["operation"], editStrength=task["strength"],
                        sourceImageId=task.get("sourceImageId"), _editSource=source)

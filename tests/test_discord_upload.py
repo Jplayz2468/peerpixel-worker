@@ -72,29 +72,31 @@ class DiscordUploadTests(unittest.TestCase):
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")
-    def test_variations_use_supplied_seeds_and_upscale_runs_true_50_step_refinement(self, submit, safety_type):
+    def test_variations_and_upscale_use_noise_continuation_without_source_images(self, submit, safety_type):
         renderer = self.renderer()
         output = io.BytesIO()
         Image.new("RGB", (16, 16), "blue").save(output, "JPEG")
         renderer.render.return_value = output.getvalue()
         renderer._safety = None
         safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
-        vary = {**self.task(), "operation": "vary", "outputCount": 4,
+        vary = {**self.task(), "operation": "vary", "outputCount": 4, "baseSeed": 7,
                 "prompts": ["one", "two", "three", "four"], "strength": .55,
                 "seeds": [11, 22, 33, 44]}
         worker._discord_task(Link(), vary, renderer, "device")
-        self.assertEqual([call.args[0]["seed"] for call in renderer.render.call_args_list], [11, 22, 33, 44])
+        self.assertEqual([call.args[0]["seed"] for call in renderer.render.call_args_list], [7] * 4)
+        self.assertEqual([call.args[0]["noiseBlendSeed"] for call in renderer.render.call_args_list], [11, 22, 33, 44])
 
         renderer.reset_mock()
         refine = {**self.task(), "operation": "refine", "width": 1024, "height": 1024,
-                  "steps": 50, "strength": .42, "sourceUrl": "/source",
-                  "sourceImageId": "image"}
-        with mock.patch.object(api, "source_image", return_value=b"source"):
-            worker._discord_task(Link(), refine, renderer, "device")
+                  "steps": 50, "baseSeed": 7, "noiseBlendStrength": .12,
+                  "noiseBaseWidth": 512, "noiseBaseHeight": 512}
+        worker._discord_task(Link(), refine, renderer, "device")
         job = renderer.render.call_args.args[0]
         self.assertEqual((job["operation"], job["width"], job["height"], job["steps"]),
                          ("refine", 1024, 1024, 50))
-        self.assertEqual((job["editStrength"], job["_editSource"]), (.42, b"source"))
+        self.assertEqual((job["seed"], job["noiseBaseWidth"]), (7, 512))
+        self.assertNotEqual(job["noiseBlendSeed"], job["seed"])
+        self.assertNotIn("_editSource", job)
 
     def test_four_cells_are_composed_into_one_two_by_two_grid(self):
         cells = []
@@ -138,7 +140,7 @@ class DiscordUploadTests(unittest.TestCase):
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")
-    def test_vary_benchmark_compares_seed_img2img_and_noise_blend(self, submit, safety_type):
+    def test_vary_benchmark_compares_three_noise_influence_levels(self, submit, safety_type):
         renderer = self.renderer()
         output = io.BytesIO()
         Image.new("RGB", (512, 512), "blue").save(output, "JPEG")
@@ -152,11 +154,10 @@ class DiscordUploadTests(unittest.TestCase):
 
         jobs = [call.args[0] for call in renderer.render.call_args_list]
         self.assertEqual([job["operation"] for job in jobs], ["grid", "vary", "vary", "vary"])
-        self.assertNotEqual(jobs[0]["seed"], jobs[1]["seed"])
-        self.assertEqual(jobs[2]["editMode"], "vary")
-        self.assertEqual(jobs[3]["seed"], jobs[0]["seed"])
-        self.assertEqual(jobs[3]["noiseBlendSeed"], jobs[1]["seed"])
-        self.assertAlmostEqual(jobs[3]["noiseBlendStrength"], .35)
+        self.assertEqual([job["seed"] for job in jobs], [7, 7, 7, 7])
+        self.assertEqual([job.get("noiseBlendStrength") for job in jobs], [None, .2, .35, .5])
+        self.assertEqual(len({job["noiseBlendSeed"] for job in jobs[1:]}), 1)
+        self.assertTrue(all("editMode" not in job for job in jobs))
         cells, grid = submit.call_args.args[2:4]
         self.assertEqual(len(cells), 4)
         self.assertIsNotNone(grid)
