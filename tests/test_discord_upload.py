@@ -121,7 +121,7 @@ class DiscordUploadTests(unittest.TestCase):
         original = output.getvalue()
         large = io.BytesIO()
         Image.new("RGB", (1024, 1024), "blue").save(large, "JPEG")
-        renderer.render.side_effect = [original, large.getvalue(), large.getvalue()]
+        renderer.render.side_effect = [original, large.getvalue(), large.getvalue(), large.getvalue()]
         renderer._safety = None
         safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
         task = {**self.task(), "operation": "upscale_test", "outputCount": 4,
@@ -130,10 +130,13 @@ class DiscordUploadTests(unittest.TestCase):
         worker._discord_task(Link(), task, renderer, "device")
 
         jobs = [call.args[0] for call in renderer.render.call_args_list]
-        self.assertEqual([job["operation"] for job in jobs], ["grid", "refine", "refine"])
+        self.assertEqual([job["operation"] for job in jobs], ["grid", "refine", "refine", "refine"])
         self.assertTrue(all(call.kwargs.get("on_step") for call in renderer.render.call_args_list))
-        self.assertEqual(jobs[1]["upscaleMethod"], "img2img")
-        self.assertNotIn("upscaleMethod", jobs[2])
+        self.assertEqual([job["steps"] for job in jobs[1:]], [28, 28, 28])
+        self.assertEqual([job["noiseBlendStrength"] for job in jobs[1:]], [.10, .20, .30])
+        self.assertEqual(len({job["noiseBlendSeed"] for job in jobs[1:]}), 1)
+        self.assertTrue(all(job["baseSeed"] == 7 for job in jobs[1:]))
+        self.assertTrue(all("_editSource" not in job for job in jobs[1:]))
         cells, grid = submit.call_args.args[2:4]
         self.assertEqual(len(cells), 1)
         self.assertIsNone(grid)

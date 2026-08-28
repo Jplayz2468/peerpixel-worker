@@ -642,20 +642,19 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
             return lambda done, total: milestone("rendering", low + (high - low) * done / max(1, total))
         original = renderer.render(base, on_step=ranged_progress(.02, .18))
         milestone("rendering", .18)
-        neural = neural_upscale(original)
-        milestone("rendering", .24)
-        hires = renderer.render({**task, "operation": "refine", "outputCount": 1,
-            "sourceImageId": "benchmark-source", "_editSource": original,
-            "editMode": "refine", "editStrength": .35, "upscaleMethod": "img2img"},
-            on_step=ranged_progress(.24, .62))
-        milestone("rendering", .62)
-        reference = renderer.render({**task, "operation": "refine", "outputCount": 1,
-            "sourceImageId": "benchmark-source", "_editSource": original,
-            "editMode": "refine", "editStrength": .42}, on_step=ranged_progress(.62, .93))
-        images = [original, neural, hires, reference]
+        fresh_seed = _action_seeds(int(task.get("seed", 0)), 2)[1]
+        refinements = []
+        ranges = [(.18, .43), (.43, .68), (.68, .93)]
+        for strength, (low, high) in zip((.10, .20, .30), ranges):
+            refinements.append(renderer.render({**task, "operation": "refine", "outputCount": 1,
+                "width": 1024, "height": 1024, "steps": 28,
+                "baseSeed": int(task.get("seed", 0)), "noiseBlendSeed": fresh_seed,
+                "noiseBlendStrength": strength, "noiseBaseWidth": 512, "noiseBaseHeight": 512},
+                on_step=ranged_progress(low, high)))
+        images = [original, *refinements]
         method_results = [(image, {"moderation": safety.classify(image)}) for image in images]
         # Normalize the original preview to the comparison canvas only for the collage.
-        grid_cells = [neural_upscale(original), neural, hires, reference]
+        grid_cells = [neural_upscale(original), *refinements]
         scores = [float(item[1]["moderation"].get("nsfwScore", 0) or 0) for item in method_results]
         unsafe = any(item[1]["moderation"].get("label") == "nsfw" for item in method_results)
         rendered = [(compose_grid(grid_cells), {"moderation": {
