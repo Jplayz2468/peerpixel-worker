@@ -679,6 +679,19 @@ def handle_training_signal(message: dict, trainer_capability) -> bool:
     return trainer_capability.poll_when_idle()
 
 
+def handle_comparison_signal(message: dict, renderer, saved: dict) -> bool:
+    """Run owner-only benchmark work only after a socket signal."""
+    if message.get("type") not in ("welcome", "ack") or message.get("comparisonAvailable") is not True:
+        return False
+    from .comparison import ComparisonClient, run_comparison
+    client = ComparisonClient(str(saved.get("deviceId") or ""))
+    try:
+        lease = client.lease()
+    except Exception:
+        return False
+    return bool(lease and run_comparison(client, lease, renderer))
+
+
 def run(renderer, once: bool = False, trainer_capability=None) -> int:
     """Serve the compact Discord-first enhancement/render protocol."""
     from urllib.parse import quote
@@ -715,6 +728,8 @@ def run(renderer, once: bool = False, trainer_capability=None) -> int:
                         continue
                     message = json.loads(raw) if isinstance(raw, str) else {}
                     if handle_idle_control(message):
+                        continue
+                    if handle_comparison_signal(message, renderer, saved):
                         continue
                     if handle_training_signal(message, trainer_capability):
                         continue
