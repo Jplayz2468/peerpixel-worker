@@ -542,10 +542,6 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
             "progress": max(0.0, min(1.0, progress))}))
     if stage == "enhance":
         milestone("loading_prompt_model", .02)
-        # A CUDA worker cannot keep FLUX and the prompt model resident together
-        # reliably. Prompt work is drained as a batch, so release FLUX once and
-        # let Qwen use the accelerator for all four directions.
-        renderer.unload()
         from .prompt_enhancer import PromptEnhancer
         enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer(
             adapter_path=config.read().get("promptAdapter"))
@@ -628,6 +624,10 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     for attempt in range(5):
         try:
             api.submit_discord_result(task, device_id, rendered, grid)
+            # Release FLUX after the result is safely delivered. Doing this at
+            # the start of the next enhancement made users wait at 2% while a
+            # large CUDA pipeline was synchronously collected.
+            renderer.unload()
             return
         except api.ApiError as error:
             last_error = error

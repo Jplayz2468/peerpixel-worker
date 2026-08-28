@@ -49,7 +49,7 @@ class DiscordUploadTests(unittest.TestCase):
         self.assertEqual(result["provenance"], "bootstrap-0002")
         self.assertEqual(result["prompts"], ["one", "two", "three", "four"])
         self.assertEqual(result["negativePrompts"], ["bad one", "bad two", "bad three", "bad four"])
-        renderer.unload.assert_called_once_with()
+        renderer.unload.assert_not_called()
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")
@@ -65,6 +65,7 @@ class DiscordUploadTests(unittest.TestCase):
         worker._discord_task(Link(), task, renderer, "device")
         self.assertEqual([call.args[0]["prompt"] for call in renderer.render.call_args_list], task["prompts"])
         self.assertEqual([call.args[0]["seed"] for call in renderer.render.call_args_list], [11, 22, 33, 44])
+        renderer.unload.assert_called_once_with()
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")
