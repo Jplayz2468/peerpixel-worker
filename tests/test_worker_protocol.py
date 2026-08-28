@@ -144,6 +144,26 @@ class ProtocolVersionTests(unittest.TestCase):
             "CPU 12% · RAM 4/8 GB · online, waiting for work · 2 images",
         )
 
+    def test_prompt_trainer_requires_explicit_nested_config_opt_in(self):
+        renderer = mock.Mock()
+        client = mock.Mock()
+        disabled = worker.build_trainer_capability(
+            {"deviceId": "owner", "promptTrainer": {}}, renderer, client=client)
+        enabled = worker.build_trainer_capability(
+            {"deviceId": "owner", "promptTrainer": {"enabled": True}},
+            renderer, client=client)
+        self.assertEqual(disabled.capabilities, ())
+        self.assertEqual(enabled.capabilities, ("train",))
+
+    def test_idle_tick_polls_training_before_heartbeat(self):
+        events = []
+        capability = mock.Mock()
+        capability.poll_when_idle.side_effect = lambda: events.append("poll") or True
+        link = mock.Mock()
+        link.send.side_effect = lambda payload: events.append(json.loads(payload)["type"])
+        self.assertTrue(worker.poll_trainer_when_idle(link, capability))
+        self.assertEqual(events, ["poll", "heartbeat"])
+
 
 class SocketResultTests(unittest.TestCase):
     def test_an_edit_fetches_private_source_and_mask_only_after_assignment(self):

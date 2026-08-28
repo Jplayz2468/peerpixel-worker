@@ -612,7 +612,48 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     api.report_discord_result_failure(task, device_id, reason)
 
 
-def run(renderer, once: bool = False) -> int:
+def build_trainer_capability(saved: dict, renderer, *, client=None):
+    """Build the inert-by-default trainer used only during socket idle time."""
+    from .trainer import TrainerCapability, TrainingHttpClient
+
+    options = saved.get("promptTrainer")
+    options = options if isinstance(options, dict) else {}
+    enabled = options.get("enabled") is True
+
+    def active_adapter():
+        return config.read().get("promptAdapter")
+
+    def release_models():
+        renderer.unload()
+        enhancer = getattr(renderer, "_enhancer", None)
+        if enhancer is not None:
+            enhancer.unload()
+
+    def activate(candidate, _response):
+        # The coordinator response is the promotion authority. Only this
+        # callback, invoked after promoted:true, moves the local runtime pointer.
+        config.write(promptAdapter=str(candidate))
+        enhancer = getattr(renderer, "_enhancer", None)
+        if enhancer is not None:
+            enhancer.unload()
+            renderer._enhancer = None
+
+    root = options.get("stagingRoot") or config.HOME / "training" / "candidates"
+    return TrainerCapability(
+        client or TrainingHttpClient(), device_id=str(saved.get("deviceId") or ""),
+        enabled=enabled, active_adapter=active_adapter, staging_root=root,
+        on_training_start=release_models, on_promoted=activate,
+    )
+
+
+def poll_trainer_when_idle(link, trainer_capability) -> bool:
+    """Poll one training lease before sending the ordinary idle heartbeat."""
+    handled = trainer_capability.poll_when_idle()
+    link.send(json.dumps({"type": "heartbeat"}))
+    return handled
+
+
+def run(renderer, once: bool = False, trainer_capability=None) -> int:
     """Serve the compact Discord-first enhancement/render protocol."""
     from urllib.parse import quote
     saved = config.read()
@@ -622,7 +663,11 @@ def run(renderer, once: bool = False) -> int:
         from websockets.sync.client import connect
     except ImportError:
         raise SystemExit("missing dependency: run `peerpixel setup`") from None
-    capabilities = quote(json.dumps({"enhance": True, "render": True}, separators=(",", ":")))
+    trainer_capability = trainer_capability or build_trainer_capability(saved, renderer)
+    advertised = {"enhance": True, "render": True}
+    if "train" in trainer_capability.capabilities:
+        advertised["train"] = True
+    capabilities = quote(json.dumps(advertised, separators=(",", ":")))
     url = (config.API.replace("http", "ws", 1) + "/api/worker/connect"
            + f"?deviceId={quote(str(saved['deviceId']))}&capabilities={capabilities}"
            + f"&accelerator={quote(str(saved.get('accelerator', 'unknown')))}&enhancerLoaded=0"
@@ -640,7 +685,7 @@ def run(renderer, once: bool = False) -> int:
                     try:
                         raw = link.recv(timeout=HEARTBEAT_SECONDS)
                     except TimeoutError:
-                        link.send(json.dumps({"type": "heartbeat"}))
+                        poll_trainer_when_idle(link, trainer_capability)
                         continue
                     message = json.loads(raw) if isinstance(raw, str) else {}
                     if handle_idle_control(message):
