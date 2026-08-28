@@ -537,7 +537,8 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     stage = task["stage"]
     if stage == "enhance":
         from .prompt_enhancer import PromptEnhancer
-        enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer()
+        enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer(
+            adapter_path=config.read().get("promptAdapter"))
         renderer._enhancer = enhancer
         pair = enhancer.enhance_pair(task["prompt"], "auto")
         link.send(json.dumps({"type": "task_result", "taskId": task["id"],

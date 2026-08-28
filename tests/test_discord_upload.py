@@ -1,5 +1,6 @@
 import unittest
 import io
+import json
 from unittest import mock
 
 from PIL import Image, JpegImagePlugin
@@ -25,6 +26,20 @@ class DiscordUploadTests(unittest.TestCase):
         renderer = mock.Mock()
         renderer.render.return_value = b"jpeg"
         return renderer
+
+    @mock.patch("peerpixel.prompt_enhancer.PromptEnhancer")
+    @mock.patch("peerpixel.config.read", return_value={"promptAdapter": "/models/bootstrap"})
+    def test_enhancement_injects_the_machine_local_adapter(self, _read, enhancer_type):
+        renderer = self.renderer()
+        renderer._enhancer = None
+        enhancer_type.return_value.enhance_pair.return_value = {
+            "prompt": "A red fox.", "negativePrompt": "blur"}
+        enhancer_type.return_value.provenance = "bootstrap-0002"
+        link = Link()
+        worker._discord_task(link, {"id": "job", "stage": "enhance",
+            "assignmentToken": "lease", "prompt": "fox"}, renderer, "device")
+        enhancer_type.assert_called_once_with(adapter_path="/models/bootstrap")
+        self.assertEqual(json.loads(link.sent[0])["provenance"], "bootstrap-0002")
 
     def test_four_cells_are_composed_into_one_two_by_two_grid(self):
         cells = []
