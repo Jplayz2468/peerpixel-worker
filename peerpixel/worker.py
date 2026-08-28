@@ -708,6 +708,7 @@ def handle_bootstrap_signal(message: dict, saved: dict) -> bool:
         artifact = package_candidate(root)
         api._call("/api/worker/training/bootstrap", method="PUT", payload={
             "deviceId": str(saved.get("deviceId") or ""), "manifest": manifest,
+            "registrationVersion": str(message.get("bootstrapVersion") or manifest.get("version") or ""),
             "artifactBase64": base64.b64encode(artifact).decode(),
             "artifactDigest": hashlib.sha256(artifact).hexdigest(),
         }, timeout=900)
