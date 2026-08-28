@@ -635,17 +635,20 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         base = {**task, "operation": "grid", "width": 512, "height": 512,
                 "steps": 16, "outputCount": 1, "enhance": False}
         started = _time.monotonic()
-        original = renderer.render(base)
+        def ranged_progress(low, high):
+            return lambda done, total: milestone("rendering", low + (high - low) * done / max(1, total))
+        original = renderer.render(base, on_step=ranged_progress(.02, .18))
         milestone("rendering", .18)
         neural = neural_upscale(original)
         milestone("rendering", .24)
         hires = renderer.render({**task, "operation": "refine", "outputCount": 1,
             "sourceImageId": "benchmark-source", "_editSource": original,
-            "editMode": "refine", "editStrength": .35, "upscaleMethod": "img2img"})
+            "editMode": "refine", "editStrength": .35, "upscaleMethod": "img2img"},
+            on_step=ranged_progress(.24, .62))
         milestone("rendering", .62)
         reference = renderer.render({**task, "operation": "refine", "outputCount": 1,
             "sourceImageId": "benchmark-source", "_editSource": original,
-            "editMode": "refine", "editStrength": .42})
+            "editMode": "refine", "editStrength": .42}, on_step=ranged_progress(.62, .93))
         images = [original, neural, hires, reference]
         rendered = [(image, {"moderation": safety.classify(image)}) for image in images]
         # Normalize the original preview to the comparison canvas only for the collage.

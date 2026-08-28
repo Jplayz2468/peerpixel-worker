@@ -129,6 +129,7 @@ class DiscordUploadTests(unittest.TestCase):
 
         jobs = [call.args[0] for call in renderer.render.call_args_list]
         self.assertEqual([job["operation"] for job in jobs], ["grid", "refine", "refine"])
+        self.assertTrue(all(call.kwargs.get("on_step") for call in renderer.render.call_args_list))
         self.assertEqual(jobs[1]["upscaleMethod"], "img2img")
         self.assertNotIn("upscaleMethod", jobs[2])
         cells, grid = submit.call_args.args[2:4]
