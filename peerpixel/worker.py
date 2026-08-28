@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import time
 import urllib.request
@@ -533,6 +534,17 @@ def compose_grid(cells: list[bytes]) -> bytes:
     return output.getvalue()
 
 
+def neural_upscale(image_bytes: bytes) -> bytes:
+    """A conservative 2x baseline which cannot redraw the selected image."""
+    from PIL import Image, ImageFilter
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    image = image.resize((image.width * 2, image.height * 2), Image.Resampling.LANCZOS)
+    image = image.filter(ImageFilter.UnsharpMask(radius=1.0, percent=65, threshold=3))
+    output = io.BytesIO()
+    image.save(output, "JPEG", quality=95, subsampling=0, optimize=True)
+    return output.getvalue()
+
+
 def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     token = task["assignmentToken"]
     stage = task["stage"]
@@ -567,6 +579,55 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         enhancer.unload()
         renderer._enhancer = None
     milestone("loading_flux", .01)
+    if task.get("operation") == "upscale_test":
+        from .safety import SafetyClassifier
+        import time as _time
+        safety = getattr(renderer, "_safety", None) or SafetyClassifier()
+        renderer._safety = safety
+        base = {**task, "operation": "grid", "width": 512, "height": 512,
+                "steps": 16, "outputCount": 1, "enhance": False}
+        started = _time.monotonic()
+        original = renderer.render(base)
+        milestone("rendering", .18)
+        neural = neural_upscale(original)
+        milestone("rendering", .24)
+        hires = renderer.render({**task, "operation": "refine", "outputCount": 1,
+            "sourceImageId": "benchmark-source", "_editSource": original,
+            "editMode": "refine", "editStrength": .35, "upscaleMethod": "img2img"})
+        milestone("rendering", .62)
+        reference = renderer.render({**task, "operation": "refine", "outputCount": 1,
+            "sourceImageId": "benchmark-source", "_editSource": original,
+            "editMode": "refine", "editStrength": .42})
+        images = [original, neural, hires, reference]
+        rendered = [(image, {"moderation": safety.classify(image)}) for image in images]
+        # Normalize the original preview to the comparison canvas only for the collage.
+        grid_cells = [neural_upscale(original), neural, hires, reference]
+        grid = (compose_grid(grid_cells), {"moderation": {"label": "normal", "nsfwScore": max(
+            float(item[1]["moderation"].get("nsfwScore", 0) or 0) for item in rendered)}})
+        milestone("uploading", .97)
+        link.send(json.dumps({"type": "task_result", "taskId": task["id"], "stage": "render",
+            "assignmentToken": token, "resultId": task["id"],
+            "benchmarkSeconds": round(_time.monotonic() - started, 2)}))
+        last_error = None
+        for attempt in range(5):
+            try:
+                api.submit_discord_result(task, device_id, rendered, grid)
+                last_error = None
+                break
+            except api.ApiError as error:
+                last_error = error
+                if error.status != 409 and error.status < 500:
+                    break
+            except Exception as error:  # transient upload failure
+                last_error = error
+            if attempt < 4:
+                _time.sleep(.25 * (attempt + 1))
+        if last_error is not None:
+            reason = last_error.code if isinstance(last_error, api.ApiError) else type(last_error).__name__
+            api.report_discord_result_failure(task, device_id, reason)
+            return
+        renderer.unload()
+        return
     source = None
     if task.get("sourceUrl"):
         source = api.source_image(task["sourceUrl"], device_id=device_id,

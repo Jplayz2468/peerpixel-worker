@@ -110,6 +110,31 @@ class DiscordUploadTests(unittest.TestCase):
         self.assertEqual(image.format, "JPEG")
         self.assertEqual(JpegImagePlugin.get_sampling(image), 0)
 
+    @mock.patch("peerpixel.safety.SafetyClassifier")
+    @mock.patch.object(api, "submit_discord_result")
+    def test_upscale_benchmark_renders_one_source_and_three_comparable_methods(self, submit, safety_type):
+        renderer = self.renderer()
+        output = io.BytesIO()
+        Image.new("RGB", (512, 512), "blue").save(output, "JPEG")
+        original = output.getvalue()
+        large = io.BytesIO()
+        Image.new("RGB", (1024, 1024), "blue").save(large, "JPEG")
+        renderer.render.side_effect = [original, large.getvalue(), large.getvalue()]
+        renderer._safety = None
+        safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
+        task = {**self.task(), "operation": "upscale_test", "outputCount": 4,
+                "width": 1024, "height": 1024, "steps": 50}
+
+        worker._discord_task(Link(), task, renderer, "device")
+
+        jobs = [call.args[0] for call in renderer.render.call_args_list]
+        self.assertEqual([job["operation"] for job in jobs], ["grid", "refine", "refine"])
+        self.assertEqual(jobs[1]["upscaleMethod"], "img2img")
+        self.assertNotIn("upscaleMethod", jobs[2])
+        cells, grid = submit.call_args.args[2:4]
+        self.assertEqual(len(cells), 4)
+        self.assertIsNotNone(grid)
+
     def test_composite_keeps_a_1024_pixel_long_edge_for_supported_aspects(self):
         for cell_size, expected in (((408, 512), (816, 1024)), ((512, 408), (1024, 816))):
             output = io.BytesIO()

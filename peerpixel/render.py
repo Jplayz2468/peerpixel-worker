@@ -959,7 +959,7 @@ class Renderer:
                 job.get("_editSource", b""), job.get("_editMask"),
                 mode=editing["mode"], width=width, height=height,
             )
-            if edit_backend(editing["mode"]) == "reference":
+            if edit_backend(editing["mode"]) == "reference" and job.get("upscaleMethod") != "img2img":
                 # Klein's native pipeline conditions on the selected image but
                 # still generates fresh 1024-scale latents for all 50 steps.
                 # This creates real detail instead of repainting a white mask.
