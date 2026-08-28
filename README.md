@@ -45,7 +45,7 @@ peerpixel update      install the newest GitHub release
 
 Only a moderator can issue a permanent worker key. Save it once with `peerpixel pair KEY`; there is no public or automatic pairing flow. Each connection registers its accelerator, enhancement/render capabilities, loaded-model state, and timing estimates. One connection performs one task at a time.
 
-Enhancement tasks receive prompt work only and return an enhanced prompt with minimal provenance. Render tasks receive the final enhanced prompt and must not enhance it again. Every task includes an assignment token; stale or mismatched results are rejected. A render is complete only after its upload passes byte validation, worker safety evidence, authoritative server moderation, R2 persistence, and D1 persistence.
+Enhancement tasks receive prompt work only and return four aligned positive/negative prompt pairs with minimal provenance. Qwen writes one complete internal negative prompt for each positive prompt; the deterministic template is used only when structured output is missing or invalid. Render tasks receive the final aligned pairs and must not enhance them again. Every task includes an assignment token; stale or mismatched results are rejected. A render is complete only after its upload passes byte validation, worker safety evidence, authoritative server moderation, R2 persistence, and D1 persistence.
 
 Every completed contributed render adds one bonus generation to the owner's current weekly Discord allowance. There are no pixels, credits, payouts, or reputation scores.
 
