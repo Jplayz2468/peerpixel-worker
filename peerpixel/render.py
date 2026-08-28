@@ -411,7 +411,7 @@ EDIT_STRENGTHS = {
     # The coordinator owns product tuning. Workers enforce only a broad safety
     # envelope so strength changes do not require a fleet update.
     "vary": (0.15, 0.95, 0.65),
-    "refine": (0.35, 0.75, 0.55),
+    "refine": (0.15, 0.35, 0.20),
     "inpaint": (0.35, 0.85, 0.65),
 }
 
@@ -423,8 +423,8 @@ def scheduled_edit_steps(actual_steps: int, strength: float) -> int:
 
 
 def edit_backend(mode: str) -> str:
-    """Use native Klein reference conditioning for detail refinement only."""
-    return "reference" if mode == "refine" else "inpaint"
+    """Use source-conditioned diffusion for edits and detail refinement."""
+    return "inpaint"
 
 
 def edit_spec(job: dict) -> dict | None:

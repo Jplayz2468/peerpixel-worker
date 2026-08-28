@@ -28,8 +28,8 @@ class DiscordActionTests(unittest.TestCase):
                 render.operation_of({"operation": "vary", **bad})
 
     def test_refine_uses_coordinator_denoise_inside_a_detail_safe_envelope(self):
-        self.assertEqual(render.edit_spec({"editMode": "refine", "editStrength": .55,
-                         "sourceImageId": "image-1"}), {"mode": "refine", "strength": .55})
+        self.assertEqual(render.edit_spec({"editMode": "refine", "editStrength": .20,
+                         "sourceImageId": "image-1"}), {"mode": "refine", "strength": .20})
         with self.assertRaises(ValueError):
             render.edit_spec({"editMode": "refine", "editStrength": .76,
                               "sourceImageId": "image-1"})
@@ -37,8 +37,8 @@ class DiscordActionTests(unittest.TestCase):
     def test_refine_schedules_fifty_actual_denoising_steps_after_strength_truncation(self):
         self.assertEqual(render.scheduled_edit_steps(50, .42), 120)
 
-    def test_refine_uses_native_reference_conditioning_not_a_full_inpaint_mask(self):
-        self.assertEqual(render.edit_backend("refine"), "reference")
+    def test_refine_uses_img2img_conditioning_to_preserve_the_selected_composition(self):
+        self.assertEqual(render.edit_backend("refine"), "inpaint")
         self.assertEqual(render.edit_backend("vary"), "inpaint")
 
 
