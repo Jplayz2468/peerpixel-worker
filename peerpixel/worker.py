@@ -699,14 +699,21 @@ def handle_bootstrap_signal(message: dict, saved: dict) -> bool:
         return False
     from pathlib import Path
     from .trainer import package_candidate
+    requested = str(message.get("bootstrapVersion") or "")
     adapter = config.read().get("promptAdapter")
     if not adapter:
         return False
     root = Path(adapter)
     try:
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        if manifest.get("version") != requested or manifest.get("kind") != "bootstrap":
+            for manifest_path in config.HOME.rglob("manifest.json"):
+                candidate = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if candidate.get("version") == requested and candidate.get("kind") == "bootstrap":
+                    root, manifest = manifest_path.parent, candidate
+                    break
         artifact = package_candidate(root)
-        version = str(message.get("bootstrapVersion") or manifest.get("version") or "")
+        version = requested or str(manifest.get("version") or "")
         token = config.read().get("token", "")
         request = urllib.request.Request(f"{config.API}/api/worker/training/bootstrap",
             data=artifact, method="PUT", headers={
