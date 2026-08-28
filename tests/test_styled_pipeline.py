@@ -98,24 +98,28 @@ class StyledPipelineTests(unittest.TestCase):
         enhancer.tokenizer = mock.Mock()
         enhancer.tokenizer.apply_chat_template.return_value = "chat"
         enhancer.tokenizer.return_value = BatchEncoding({
-            "input_ids": torch.tensor([[1, 2], [1, 2], [1, 2], [1, 2]]),
-            "attention_mask": torch.tensor([[1, 1], [1, 1], [1, 1], [1, 1]]),
+            "input_ids": torch.tensor([[1, 2]]),
+            "attention_mask": torch.tensor([[1, 1]]),
         })
         enhancer.tokenizer.decode.side_effect = [
             json.dumps({"prompt": f"scene {index}", "negative_prompt": f"defect {index}"})
             for index in range(4)
         ]
         enhancer.model = mock.Mock(device=torch.device("cpu"))
-        enhancer.model.generate.return_value = torch.tensor([
-            [1, 2, 3], [1, 2, 4], [1, 2, 5], [1, 2, 6],
-        ])
+        enhancer.model.generate.side_effect = [
+            torch.tensor([[1, 2, token]]) for token in (3, 4, 5, 6)
+        ]
+        progress = []
 
-        pairs = enhancer.enhance_pairs_batch("fox", count=4)
+        pairs = enhancer.enhance_pairs_batch("fox", count=4,
+                                             on_progress=progress.append)
 
         self.assertEqual(pairs, [
             {"prompt": f"scene {index}", "negativePrompt": f"defect {index}"}
             for index in range(4)
         ])
+        self.assertEqual(progress, [1, 2, 3, 4])
+        self.assertEqual(enhancer.model.generate.call_count, 4)
 
     def test_prompt_model_is_released_before_flux_uses_the_accelerator(self):
         events = []

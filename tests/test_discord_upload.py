@@ -50,6 +50,9 @@ class DiscordUploadTests(unittest.TestCase):
         self.assertEqual(result["prompts"], ["one", "two", "three", "four"])
         self.assertEqual(result["negativePrompts"], ["bad one", "bad two", "bad three", "bad four"])
         renderer.unload.assert_not_called()
+        progress = [json.loads(message)["progress"] for message in link.sent
+                    if json.loads(message).get("type") == "progress"]
+        self.assertGreaterEqual(len(progress), 2)
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")

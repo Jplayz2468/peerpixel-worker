@@ -550,6 +550,7 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         pairs = enhancer.enhance_pairs_batch(
             task["prompt"], count=int(task.get("count", 4)),
             sampling=task.get("sampling"), mode=task.get("mode", "broad"),
+            on_progress=lambda done: milestone("exploring_prompts", .12 + .28 * done / 4),
         )
         prompts = [pair["prompt"] for pair in pairs]
         negative_prompts = [pair["negativePrompt"] for pair in pairs]

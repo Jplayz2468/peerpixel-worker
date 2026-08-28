@@ -313,7 +313,8 @@ class PromptEnhancer:
 
     def enhance_pairs_batch(self, prompt: str, *, count: int = 4,
                             sampling: dict | None = None,
-                            mode: str = "broad") -> list[dict[str, str]]:
+                            mode: str = "broad",
+                            on_progress=None) -> list[dict[str, str]]:
         """Explore several prompt directions in one model pass.
 
         Sampling policy comes from the coordinator, so changing exploration
@@ -338,18 +339,19 @@ class PromptEnhancer:
         text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
         )
-        inputs = self.tokenizer([text] * count, padding=True, return_tensors="pt").to(self.model.device)
-        with torch.random.fork_rng():
-            torch.manual_seed(sampling_seed(prompt, mode))
-            outputs = self.model.generate(
-                **inputs, max_new_tokens=max_tokens, do_sample=True,
-                logits_processor=[PerRowTemperature(temperatures)], top_p=top_p,
-                repetition_penalty=repetition_penalty,
-            )
+        inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
         width = inputs.input_ids.shape[-1]
         visible_text = requested_visible_text(prompt)
         pairs = []
-        for output in outputs:
+        base_seed = sampling_seed(prompt, mode)
+        for index, temperature in enumerate(temperatures):
+            with torch.random.fork_rng():
+                torch.manual_seed(base_seed + index * 104729)
+                output = self.model.generate(
+                    **inputs, max_new_tokens=max_tokens, do_sample=True,
+                    temperature=temperature, top_p=top_p,
+                    repetition_penalty=repetition_penalty,
+                )[0]
             generated = self.tokenizer.decode(output[width:], skip_special_tokens=True).strip()
             invalid = (not generated or generated.startswith(("[", "```"))
                        or generated.lower().startswith(("here is", "enhanced prompt", "prompt:")))
@@ -358,6 +360,8 @@ class PromptEnhancer:
             pairs.append(parse_enhancement(
                 generated, fallback_prompt=prompt, fallback_negative=COMMON_NEGATIVE,
                 visible_text=visible_text))
+            if on_progress is not None:
+                on_progress(index + 1)
         return pairs
 
     def enhance_batch(self, prompt: str, *, count: int = 4,
