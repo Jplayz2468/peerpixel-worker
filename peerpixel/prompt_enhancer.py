@@ -324,6 +324,7 @@ class PromptEnhancer:
             raise ValueError("temperature_batch_mismatch")
         temperatures = [max(0.05, min(2.0, float(value))) for value in supplied]
         top_p = max(0.1, min(1.0, float(policy.get("topP", 0.95))))
+        repetition_penalty = max(1.0, min(1.3, float(policy.get("repetitionPenalty", 1.0))))
         max_tokens = max(32, min(MAX_NEW_TOKENS, int(policy.get("maxNewTokens",
                                                                 policy.get("maxTokens", MAX_NEW_TOKENS)))))
         self.warm()
@@ -339,6 +340,7 @@ class PromptEnhancer:
             outputs = self.model.generate(
                 **inputs, max_new_tokens=max_tokens, do_sample=True,
                 logits_processor=[PerRowTemperature(temperatures)], top_p=top_p,
+                repetition_penalty=repetition_penalty,
             )
         width = inputs.input_ids.shape[-1]
         visible_text = requested_visible_text(prompt)

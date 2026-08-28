@@ -203,6 +203,20 @@ class MasterTests(unittest.TestCase):
         latents = pipe.calls[0]["latents"]
         self.assertEqual(tuple(latents.shape), (1, 128, 64, 64))
 
+    def test_refine_runs_native_1024_reference_conditioning_for_fifty_steps(self):
+        pipe = FakePipeline()
+        renderer = renderer_with(pipe)
+        source = a_jpeg((512, 512))
+        renderer.render({"prompt": "a quiet harbour", "seed": 7,
+            "operation": "refine", "width": 1024, "height": 1024,
+            "steps": 50, "editMode": "refine", "editStrength": .42,
+            "sourceImageId": "source", "_editSource": source})
+        call = pipe.calls[0]
+        self.assertEqual(call["image"].size, (1024, 1024))
+        self.assertEqual(call["num_inference_steps"], 50)
+        self.assertNotIn("mask_image", call)
+        self.assertNotIn("strength", call)
+
     def test_the_decode_is_announced_so_the_bar_does_not_sit_at_the_last_step(self):
         """The freeze this exists to prevent, as a test.
 

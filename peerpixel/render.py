@@ -422,6 +422,11 @@ def scheduled_edit_steps(actual_steps: int, strength: float) -> int:
     return max(int(actual_steps), int(math.ceil(int(actual_steps) / float(strength))))
 
 
+def edit_backend(mode: str) -> str:
+    """Use native Klein reference conditioning for detail refinement only."""
+    return "reference" if mode == "refine" else "inpaint"
+
+
 def edit_spec(job: dict) -> dict | None:
     mode = job.get("editMode")
     if not mode:
@@ -954,10 +959,17 @@ class Renderer:
                 job.get("_editSource", b""), job.get("_editMask"),
                 mode=editing["mode"], width=width, height=height,
             )
-            pipeline_args.update(image=source, mask_image=mask, strength=editing["strength"],
-                                 num_inference_steps=scheduled_edit_steps(
-                                     steps, editing["strength"]))
-            image = self.edit_pipeline()(**pipeline_args).images[0]
+            if edit_backend(editing["mode"]) == "reference":
+                # Klein's native pipeline conditions on the selected image but
+                # still generates fresh 1024-scale latents for all 50 steps.
+                # This creates real detail instead of repainting a white mask.
+                pipeline_args["image"] = source
+                image = self.pipe(**pipeline_args).images[0]
+            else:
+                pipeline_args.update(image=source, mask_image=mask, strength=editing["strength"],
+                                     num_inference_steps=scheduled_edit_steps(
+                                         steps, editing["strength"]))
+                image = self.edit_pipeline()(**pipeline_args).images[0]
         else:
             # Ordinary generation starts from portable CPU-seeded noise.
             pipeline_args["latents"] = seeded_latents(

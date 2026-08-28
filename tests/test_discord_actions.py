@@ -37,6 +37,10 @@ class DiscordActionTests(unittest.TestCase):
     def test_refine_schedules_fifty_actual_denoising_steps_after_strength_truncation(self):
         self.assertEqual(render.scheduled_edit_steps(50, .42), 120)
 
+    def test_refine_uses_native_reference_conditioning_not_a_full_inpaint_mask(self):
+        self.assertEqual(render.edit_backend("refine"), "reference")
+        self.assertEqual(render.edit_backend("vary"), "inpaint")
+
 
 if __name__ == "__main__":
     unittest.main()
