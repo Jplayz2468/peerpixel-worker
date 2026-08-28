@@ -692,6 +692,30 @@ def handle_comparison_signal(message: dict, renderer, saved: dict) -> bool:
     return bool(lease and run_comparison(client, lease, renderer))
 
 
+def handle_bootstrap_signal(message: dict, saved: dict) -> bool:
+    """Register the trainer's validated local bootstrap artifact once."""
+    if message.get("type") not in ("welcome", "ack") or message.get("bootstrapRequired") is not True:
+        return False
+    import base64
+    from pathlib import Path
+    from .trainer import package_candidate
+    adapter = config.read().get("promptAdapter")
+    if not adapter:
+        return False
+    root = Path(adapter)
+    try:
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        artifact = package_candidate(root)
+        api._call("/api/worker/training/bootstrap", method="PUT", payload={
+            "deviceId": str(saved.get("deviceId") or ""), "manifest": manifest,
+            "artifactBase64": base64.b64encode(artifact).decode(),
+            "artifactDigest": hashlib.sha256(artifact).hexdigest(),
+        }, timeout=900)
+        return True
+    except Exception:
+        return False
+
+
 def run(renderer, once: bool = False, trainer_capability=None) -> int:
     """Serve the compact Discord-first enhancement/render protocol."""
     from urllib.parse import quote
@@ -728,6 +752,8 @@ def run(renderer, once: bool = False, trainer_capability=None) -> int:
                         continue
                     message = json.loads(raw) if isinstance(raw, str) else {}
                     if handle_idle_control(message):
+                        continue
+                    if handle_bootstrap_signal(message, saved):
                         continue
                     if handle_comparison_signal(message, renderer, saved):
                         continue
