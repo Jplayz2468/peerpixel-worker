@@ -116,6 +116,17 @@ class OperationTableTests(unittest.TestCase):
                 })
                 self.assertEqual((spec["width"], spec["height"]), (width, height))
 
+    def test_refine_accepts_each_512px_upscale_aspect_at_fifty_steps(self):
+        for width, height in (
+            (512, 512), (512, 384), (384, 512), (512, 288), (288, 512),
+        ):
+            with self.subTest(width=width, height=height):
+                spec = render.operation_of({
+                    "operation": "refine", "width": width, "height": height, "steps": 50,
+                })
+                self.assertEqual((spec["width"], spec["height"], spec["steps"]),
+                                 (width, height, 50))
+
     def test_a_master_still_refuses_an_arbitrary_near_megapixel_shape(self):
         with self.assertRaises(ValueError):
             render.operation_of({"operation": "master", "width": 1024, "height": 768})

@@ -369,7 +369,7 @@ def operation_of(job: dict) -> dict:
         width = int(job.get("width", spec["width"]))
         height = int(job.get("height", spec["height"]))
         steps = int(job.get("steps", spec["steps"]))
-        max_side, max_pixels, min_side, step_range = ((1024, 1024 * 1024, 512, (20, 60))
+        max_side, max_pixels, min_side, step_range = ((1024, 1024 * 1024, 256, (20, 60))
             if name == "refine" else (512, 512 * 512, 256, (8, 32)))
         if (width % 8 or height % 8 or min(width, height) < min_side
                 or max(width, height) > max_side or width * height > max_pixels
