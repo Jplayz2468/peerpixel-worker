@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import unittest
+import urllib.error
 import zipfile
 from unittest import mock
 
@@ -20,6 +21,21 @@ def adapter(version):
 
 
 class ComparisonTests(unittest.TestCase):
+    @mock.patch("time.sleep")
+    @mock.patch("peerpixel.comparison.api._call")
+    def test_progress_retries_a_transient_tls_timeout(self, call, sleep):
+        call.side_effect = [
+            urllib.error.URLError(TimeoutError("TLS handshake timed out")),
+            {"ok": True},
+        ]
+
+        result = comparison.ComparisonClient("device").progress(
+            {"runId": "run", "leaseToken": "lease"}, "enhancing", 26, 40)
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(call.call_count, 2)
+        sleep.assert_called_once_with(0.5)
+
     def test_fixed_benchmark_renders_forty_images_and_uploads_twenty_pairs(self):
         prompts = [{"id": f"prompt-{i:02d}", "rawPrompt": f"prompt {i}",
                     "llmSeed": 100 + i, "diffusionSeed": 200 + i} for i in range(1, 21)]

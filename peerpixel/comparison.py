@@ -7,6 +7,7 @@ import io
 import json
 import shutil
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -46,9 +47,15 @@ class ComparisonClient:
         return self._download(f"/api/worker/comparison/adapter/{lease['runId']}/{side}", lease)
 
     def progress(self, lease, phase, completed, total):
-        return api._call(f"/api/worker/comparison/progress/{lease['runId']}", method="POST",
-            payload={"deviceId": self.device_id, "leaseToken": lease["leaseToken"],
-                     "phase": phase, "completed": completed, "total": total})
+        for attempt in range(3):
+            try:
+                return api._call(f"/api/worker/comparison/progress/{lease['runId']}", method="POST",
+                    payload={"deviceId": self.device_id, "leaseToken": lease["leaseToken"],
+                             "phase": phase, "completed": completed, "total": total})
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
+                if attempt == 2:
+                    raise
+                time.sleep(0.5 * (2 ** attempt))
 
     def submit(self, lease, artifact: bytes, manifest: dict):
         return api._call(f"/api/worker/comparison/result/{lease['runId']}", method="PUT",
@@ -164,4 +171,3 @@ def run_comparison(client: ComparisonClient, lease: dict, renderer) -> bool:
         return False
     finally:
         shutil.rmtree(root, ignore_errors=True)
-
