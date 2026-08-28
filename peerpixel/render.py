@@ -411,7 +411,7 @@ EDIT_STRENGTHS = {
     # The coordinator owns product tuning. Workers enforce only a broad safety
     # envelope so strength changes do not require a fleet update.
     "vary": (0.15, 0.95, 0.65),
-    "refine": (0.35, 0.75, 0.55),
+    "refine": (0.10, 0.75, 0.12),
     "inpaint": (0.35, 0.85, 0.65),
 }
 

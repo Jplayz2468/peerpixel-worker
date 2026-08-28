@@ -28,11 +28,14 @@ class DiscordActionTests(unittest.TestCase):
                 render.operation_of({"operation": "vary", **bad})
 
     def test_refine_uses_coordinator_denoise_inside_a_detail_safe_envelope(self):
-        self.assertEqual(render.edit_spec({"editMode": "refine", "editStrength": .55,
-                         "sourceImageId": "image-1"}), {"mode": "refine", "strength": .55})
-        with self.assertRaises(ValueError):
-            render.edit_spec({"editMode": "refine", "editStrength": .76,
-                              "sourceImageId": "image-1"})
+        self.assertEqual(render.edit_spec({"editMode": "refine", "editStrength": .12,
+                         "sourceImageId": "image-1"}), {"mode": "refine", "strength": .12})
+        self.assertEqual(render.edit_spec({"editMode": "refine", "sourceImageId": "image-1"}),
+                         {"mode": "refine", "strength": .12})
+        for strength in (.09, .76):
+            with self.assertRaises(ValueError):
+                render.edit_spec({"editMode": "refine", "editStrength": strength,
+                                  "sourceImageId": "image-1"})
 
 
 if __name__ == "__main__":
