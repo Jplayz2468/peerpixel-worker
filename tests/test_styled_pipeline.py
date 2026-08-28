@@ -22,6 +22,11 @@ class StyledPipelineTests(unittest.TestCase):
             {"role": "user", "content": "fox"},
         ])
 
+    def test_owner_can_persist_an_adapter_path_in_local_worker_config(self):
+        with mock.patch("peerpixel.config.read", return_value={"promptAdapter": "/models/bootstrap"}):
+            enhancer = PromptEnhancer()
+        self.assertEqual(enhancer.adapter_path, Path("/models/bootstrap"))
+
     def test_validated_adapter_loads_and_reports_its_version(self):
         from peerpixel.lora_manifest import write_manifest
         with tempfile.TemporaryDirectory() as folder:

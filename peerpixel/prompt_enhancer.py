@@ -240,8 +240,9 @@ def bootstrap_messages(prompt: str) -> list[dict[str, str]]:
 class PromptEnhancer:
     def __init__(self, model_path=None, adapter_path=None):
         self.model_path = model_path
-        configured = adapter_path if adapter_path is not None else os.environ.get(
-            "PEERPIXEL_PROMPT_ADAPTER")
+        from . import config
+        configured = adapter_path if adapter_path is not None else (
+            os.environ.get("PEERPIXEL_PROMPT_ADAPTER") or config.read().get("promptAdapter"))
         self.adapter_path = Path(configured).expanduser() if configured else None
         self._adapter_manifest = None
         self.tokenizer = None
