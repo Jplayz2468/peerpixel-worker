@@ -94,7 +94,7 @@ def submit_discord_result(job: dict, device_id: str, images: list[tuple[bytes, d
                "images": [_upload_image(image, evidence) for image, evidence in images]}
     if grid is not None:
         payload["grid"] = _upload_image(*grid)
-    return _call("/api/worker/result", method="POST", payload=payload, timeout=600)
+    return _call("/api/worker/result", method="POST", payload=payload, timeout=90)
 
 
 def report_discord_result_failure(job: dict, device_id: str, reason: str) -> dict:

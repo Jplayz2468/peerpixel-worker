@@ -601,9 +601,12 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
             "seed": original_seed, "width": 512, "height": 512, "steps": 16,
             "noiseBlendSeed": varied_seed, "noiseBlendStrength": .50})
         images = [original, low, medium, high]
-        rendered = [(image, {"moderation": safety.classify(image)}) for image in images]
-        grid = (compose_grid(images), {"moderation": {"label": "normal", "nsfwScore": max(
-            float(item[1]["moderation"].get("nsfwScore", 0) or 0) for item in rendered)}})
+        method_results = [(image, {"moderation": safety.classify(image)}) for image in images]
+        scores = [float(item[1]["moderation"].get("nsfwScore", 0) or 0) for item in method_results]
+        unsafe = any(item[1]["moderation"].get("label") == "nsfw" for item in method_results)
+        rendered = [(compose_grid(images), {"moderation": {
+            "label": "nsfw" if unsafe else "normal", "nsfwScore": max(scores, default=0)}})]
+        grid = None
         milestone("uploading", .97)
         link.send(json.dumps({"type": "task_result", "taskId": task["id"], "stage": "render",
             "assignmentToken": token, "resultId": task["id"]}))
@@ -650,11 +653,14 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
             "sourceImageId": "benchmark-source", "_editSource": original,
             "editMode": "refine", "editStrength": .42}, on_step=ranged_progress(.62, .93))
         images = [original, neural, hires, reference]
-        rendered = [(image, {"moderation": safety.classify(image)}) for image in images]
+        method_results = [(image, {"moderation": safety.classify(image)}) for image in images]
         # Normalize the original preview to the comparison canvas only for the collage.
         grid_cells = [neural_upscale(original), neural, hires, reference]
-        grid = (compose_grid(grid_cells), {"moderation": {"label": "normal", "nsfwScore": max(
-            float(item[1]["moderation"].get("nsfwScore", 0) or 0) for item in rendered)}})
+        scores = [float(item[1]["moderation"].get("nsfwScore", 0) or 0) for item in method_results]
+        unsafe = any(item[1]["moderation"].get("label") == "nsfw" for item in method_results)
+        rendered = [(compose_grid(grid_cells), {"moderation": {
+            "label": "nsfw" if unsafe else "normal", "nsfwScore": max(scores, default=0)}})]
+        grid = None
         milestone("uploading", .97)
         link.send(json.dumps({"type": "task_result", "taskId": task["id"], "stage": "render",
             "assignmentToken": token, "resultId": task["id"],

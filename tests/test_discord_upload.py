@@ -135,8 +135,8 @@ class DiscordUploadTests(unittest.TestCase):
         self.assertEqual(jobs[1]["upscaleMethod"], "img2img")
         self.assertNotIn("upscaleMethod", jobs[2])
         cells, grid = submit.call_args.args[2:4]
-        self.assertEqual(len(cells), 4)
-        self.assertIsNotNone(grid)
+        self.assertEqual(len(cells), 1)
+        self.assertIsNone(grid)
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")
@@ -159,8 +159,8 @@ class DiscordUploadTests(unittest.TestCase):
         self.assertEqual(len({job["noiseBlendSeed"] for job in jobs[1:]}), 1)
         self.assertTrue(all("editMode" not in job for job in jobs))
         cells, grid = submit.call_args.args[2:4]
-        self.assertEqual(len(cells), 4)
-        self.assertIsNotNone(grid)
+        self.assertEqual(len(cells), 1)
+        self.assertIsNone(grid)
 
     def test_composite_keeps_a_1024_pixel_long_edge_for_supported_aspects(self):
         for cell_size, expected in (((408, 512), (816, 1024)), ((512, 408), (1024, 816))):
