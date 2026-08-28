@@ -136,6 +136,28 @@ class SwapTests(unittest.TestCase):
             self.assertFalse((target / ".venv" / "junk").exists())
 
 
+class DependencySyncTests(unittest.TestCase):
+    def test_an_opted_in_trainer_installs_the_training_extra_during_update(self):
+        with patch.object(updater.config, "read", return_value={
+                "promptTrainer": {"enabled": True}}), \
+             patch("peerpixel.runtime.uv", return_value="uv"), \
+             patch("peerpixel.runtime.PYTHON", "/python"), \
+             patch.object(updater.subprocess, "run") as run:
+            updater._sync()
+
+        self.assertIn("--extra", run.call_args.args[0])
+        self.assertIn("train", run.call_args.args[0])
+
+    def test_an_ordinary_worker_keeps_the_small_runtime_dependency_set(self):
+        with patch.object(updater.config, "read", return_value={}), \
+             patch("peerpixel.runtime.uv", return_value="uv"), \
+             patch("peerpixel.runtime.PYTHON", "/python"), \
+             patch.object(updater.subprocess, "run") as run:
+            updater._sync()
+
+        self.assertNotIn("--extra", run.call_args.args[0])
+
+
 class CloneUpdateTests(unittest.TestCase):
     def test_a_clone_on_an_old_feature_branch_fast_forwards_to_origin_main(self):
         class Bar:
