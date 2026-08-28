@@ -542,7 +542,7 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         pair = enhancer.enhance_pair(task["prompt"], "auto")
         link.send(json.dumps({"type": "task_result", "taskId": task["id"],
             "stage": "enhance", "assignmentToken": token, "prompt": pair["prompt"],
-            "provenance": "qwen"}))
+            "provenance": enhancer.provenance}))
         return
 
     from .safety import SafetyClassifier

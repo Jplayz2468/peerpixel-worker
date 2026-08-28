@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import re
+from pathlib import Path
 
 MAX_NEW_TOKENS = 192
 
@@ -230,11 +232,24 @@ def enhancement_messages(prompt: str, style: str) -> list[dict[str, str]]:
     ]
 
 
+def bootstrap_messages(prompt: str) -> list[dict[str, str]]:
+    """The disposable SFT contract: one raw prompt in, one plain prompt out."""
+    return [{"role": "user", "content": str(prompt or "").strip()}]
+
+
 class PromptEnhancer:
-    def __init__(self, model_path=None):
+    def __init__(self, model_path=None, adapter_path=None):
         self.model_path = model_path
+        configured = adapter_path if adapter_path is not None else os.environ.get(
+            "PEERPIXEL_PROMPT_ADAPTER")
+        self.adapter_path = Path(configured).expanduser() if configured else None
+        self._adapter_manifest = None
         self.tokenizer = None
         self.model = None
+
+    @property
+    def provenance(self) -> str:
+        return str((self._adapter_manifest or {}).get("version") or "qwen3-1.7b")
 
     def warm(self):
         if self.model is not None:
@@ -242,13 +257,24 @@ class PromptEnhancer:
         from transformers import AutoModelForCausalLM, AutoTokenizer
         from . import model_hub
 
+        if self.adapter_path:
+            from .lora_manifest import load_manifest
+            manifest = load_manifest(self.adapter_path / "manifest.json")
+            if manifest.get("kind") != "bootstrap" or not manifest.get("evaluation", {}).get("passed"):
+                raise ValueError("prompt adapter has not passed bootstrap evaluation")
+            self._adapter_manifest = manifest
         path = self.model_path or model_hub.ensure("qwen3-1.7b")
         self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
         # Keep the small language model on CPU. On Apple silicon, "auto" puts
         # it in unified GPU memory beside FLUX; the resulting pressure makes
         # the last diffusion step and VAE decode swap for minutes.
-        self.model = AutoModelForCausalLM.from_pretrained(
+        base = AutoModelForCausalLM.from_pretrained(
             path, local_files_only=True, device_map="cpu")
+        if self.adapter_path:
+            from peft import PeftModel
+            self.model = PeftModel.from_pretrained(base, self.adapter_path)
+        else:
+            self.model = base
 
     def _generate_text(self, messages, *, max_new_tokens: int, seed: int) -> str:
         import torch
@@ -267,6 +293,21 @@ class PromptEnhancer:
 
     def enhance_pair(self, prompt: str, style: str, *, enabled=True, resolved=None,
                      resolved_negative=None) -> dict[str, str]:
+        if self.adapter_path and enabled and not resolved:
+            self.warm()
+            visible_text = requested_visible_text(prompt)
+            generated = self._generate_text(
+                bootstrap_messages(prompt), max_new_tokens=MAX_NEW_TOKENS,
+                seed=sampling_seed(prompt, "bootstrap"),
+            ).strip()
+            invalid = (not generated or generated.startswith(("{", "[", "```"))
+                       or generated.lower().startswith(("here is", "enhanced prompt", "prompt:")))
+            if invalid:
+                generated = prompt.strip()
+            return parse_enhancement(
+                generated, fallback_prompt=prompt, fallback_negative=COMMON_NEGATIVE,
+                visible_text=visible_text,
+            )
         if resolved and style != "auto":
             return {"prompt": str(resolved).strip(),
                     "negativePrompt": str(resolved_negative or "").strip()}

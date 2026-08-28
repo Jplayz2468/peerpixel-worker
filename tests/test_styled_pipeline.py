@@ -1,11 +1,14 @@
 import inspect
+import json
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from peerpixel.prompt_enhancer import (
-    PromptEnhancer, SYSTEM_INSTRUCTION, enhancement_messages,
+    PromptEnhancer, SYSTEM_INSTRUCTION, bootstrap_messages, enhancement_messages,
     negative_template, parse_enhancement, sampling_seed,
     requested_visible_text, with_style_suffix,
 )
@@ -14,6 +17,49 @@ from peerpixel.render import Renderer, STYLE_RECIPES
 
 
 class StyledPipelineTests(unittest.TestCase):
+    def test_bootstrap_adapter_uses_the_plain_training_template(self):
+        self.assertEqual(bootstrap_messages("  fox  "), [
+            {"role": "user", "content": "fox"},
+        ])
+
+    def test_validated_adapter_loads_and_reports_its_version(self):
+        from peerpixel.lora_manifest import write_manifest
+        with tempfile.TemporaryDirectory() as folder:
+            adapter = Path(folder)
+            (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+            write_manifest(adapter, {
+                "schemaVersion": 1, "version": "bootstrap-0001", "kind": "bootstrap",
+                "baseModel": "Qwen/Qwen3-1.7B", "parentVersion": None,
+                "dataset": {}, "training": {}, "evaluation": {"passed": True},
+                "createdAt": "2026-08-27T00:00:00Z",
+            })
+            enhancer = PromptEnhancer(model_path="/models/qwen", adapter_path=adapter)
+            tokenizer, base, adapted = mock.Mock(), mock.Mock(), mock.Mock()
+            fake_peft = types.SimpleNamespace(PeftModel=types.SimpleNamespace(
+                from_pretrained=mock.Mock(return_value=adapted)))
+            with mock.patch("transformers.AutoTokenizer.from_pretrained", return_value=tokenizer), \
+                 mock.patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=base), \
+                 mock.patch.dict(sys.modules, {"peft": fake_peft}):
+                enhancer.warm()
+            self.assertIs(enhancer.model, adapted)
+            self.assertEqual(enhancer.provenance, "bootstrap-0001")
+
+    def test_unvalidated_or_tampered_adapter_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            enhancer = PromptEnhancer(model_path="/models/qwen", adapter_path=folder)
+            with self.assertRaises((FileNotFoundError, ValueError)):
+                enhancer.warm()
+
+    def test_bootstrap_adapter_returns_plain_prompt_without_a_style_suffix(self):
+        enhancer = PromptEnhancer(adapter_path="/adapter")
+        enhancer._adapter_manifest = {"version": "bootstrap-0001"}
+        enhancer.warm = lambda: None
+        enhancer._generate_text = lambda *_args, **_kwargs: "A red fox beneath cedar trees."
+        result = enhancer.enhance_pair("fox", "auto")
+        self.assertEqual(result["prompt"], "A red fox beneath cedar trees.")
+        self.assertNotIn("style", result)
+        self.assertEqual(enhancer.provenance, "bootstrap-0001")
+
     def test_auxiliary_models_stay_on_cpu_instead_of_competing_with_flux_on_mps(self):
         enhancer = PromptEnhancer(model_path="/models/qwen")
         fake_model = object()
