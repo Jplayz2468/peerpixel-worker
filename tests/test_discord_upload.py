@@ -82,6 +82,13 @@ class DiscordUploadTests(unittest.TestCase):
         self.assertEqual((job["prompt"], job["negativePrompt"]),
                          ("a fox", "negative fox"))
 
+    def test_render_rejects_non_string_prompt_pair_entries(self):
+        renderer = self.renderer()
+        task = {**self.task(), "prompts": [123], "negativePrompts": ["negative fox"]}
+        with self.assertRaisesRegex(ValueError, "prompt_pair_count_mismatch"):
+            worker._discord_task(Link(), task, renderer, "device")
+        renderer.render.assert_not_called()
+
     def test_four_cells_are_composed_into_one_two_by_two_grid(self):
         cells = []
         for color in ("red", "green", "blue", "yellow"):

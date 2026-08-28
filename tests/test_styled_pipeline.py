@@ -157,12 +157,25 @@ class StyledPipelineTests(unittest.TestCase):
         )
         self.assertEqual(parsed["prompt"], "A geometric library.")
 
-    def test_truncated_json_wrapper_does_not_leak_into_prompt(self):
+    def test_truncated_structured_output_falls_back_to_the_original_pair(self):
         parsed = parse_enhancement(
-            '{"prompt":"A tiny knight beneath a dragon.',
-            fallback_prompt="knight", fallback_negative="blur",
+            '{"style":"cinematic","prompt":"A tiny knight beneath a dragon.",'
+            '"negative_prompt":"duplicate dragons"',
+            fallback_prompt="original knight", fallback_negative="blur, watermark",
         )
-        self.assertEqual(parsed["prompt"], "A tiny knight beneath a dragon.")
+        self.assertEqual(parsed, {
+            "prompt": "original knight", "negativePrompt": "blur, watermark",
+        })
+
+    def test_wrong_structured_field_types_fall_back_to_the_original_pair(self):
+        parsed = parse_enhancement(
+            '{"style":"cinematic","prompt":{"scene":"tower"},'
+            '"negative_prompt":["blur"]}',
+            fallback_prompt="original tower", fallback_negative="blur, watermark",
+        )
+        self.assertEqual(parsed, {
+            "prompt": "original tower", "negativePrompt": "blur, watermark",
+        })
 
     def test_malformed_structured_output_falls_back_without_losing_the_job(self):
         self.assertEqual(parse_enhancement(
@@ -216,6 +229,18 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertIn('exact visible text "MOON PALACE"', parsed["prompt"])
         self.assertNotIn("unintended text", parsed["negativePrompt"])
         self.assertNotIn("letters", parsed["negativePrompt"])
+        self.assertIn("misspelled requested text", parsed["negativePrompt"])
+
+    def test_visible_text_removes_broad_model_exclusions(self):
+        parsed = parse_enhancement(
+            '{"prompt":"A poster reading \'OPEN LATE\'.",'
+            '"negative_prompt":"blur, no text, unwanted typography, avoid letters, watermark"}',
+            fallback_prompt='poster reading "OPEN LATE"', fallback_negative="blur",
+            visible_text=("OPEN LATE",),
+        )
+        self.assertNotIn("no text", parsed["negativePrompt"])
+        self.assertNotIn("unwanted typography", parsed["negativePrompt"])
+        self.assertNotIn("avoid letters", parsed["negativePrompt"])
         self.assertIn("misspelled requested text", parsed["negativePrompt"])
 
     def test_requested_copy_is_normalized_to_double_quotes(self):

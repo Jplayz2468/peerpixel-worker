@@ -563,7 +563,8 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     if prompts is not None or negative_prompts is not None:
         if (not isinstance(prompts, list) or not isinstance(negative_prompts, list)
                 or len(prompts) != len(seeds) or len(negative_prompts) != len(seeds)
-                or any(not str(value).strip() for value in prompts + negative_prompts)):
+                or any(not isinstance(value, str) or not value.strip()
+                       for value in prompts + negative_prompts)):
             raise ValueError("prompt_pair_count_mismatch")
     safety = getattr(renderer, "_safety", None) or SafetyClassifier()
     renderer._safety = safety

@@ -130,15 +130,13 @@ def parse_enhancement(text: str, *, fallback_prompt: str,
     except (json.JSONDecodeError, TypeError):
         value = None
     if isinstance(value, dict):
-        prompt = str(value.get("prompt") or "").strip().strip('"')
-        negative = str(value.get("negative_prompt") or "").strip().strip('"')
+        prompt_value = value.get("prompt")
+        negative_value = value.get("negative_prompt")
+        prompt = prompt_value.strip().strip('"') if isinstance(prompt_value, str) else ""
+        negative = negative_value.strip().strip('"') if isinstance(negative_value, str) else ""
     else:
-        prompt, negative = cleaned.strip('"'), ""
-        wrapper = re.match(r'^\s*\{\s*"prompt"\s*:\s*"', prompt)
-        if wrapper:
-            prompt = prompt[wrapper.end():]
-            prompt = re.sub(r'"\s*\}\s*$', "", prompt)
-            prompt = prompt.replace(r'\"', '"').replace(r'\n', ' ')
+        prompt = "" if cleaned.startswith("{") else cleaned.strip('"')
+        negative = ""
     if prompt.startswith("{"):
         try:
             nested = json.loads(prompt)
@@ -161,9 +159,12 @@ def parse_enhancement(text: str, *, fallback_prompt: str,
         )
     if visible_text:
         parts = [part.strip() for part in negative.split(",") if part.strip()]
+        broad_text_exclusion = re.compile(
+            r"^(?:no|unwanted|avoid)\s+(?:text|letters|typography)$", re.IGNORECASE,
+        )
         parts = [part for part in parts if part.lower() not in {
             "unintended text", "text", "letters", "typography",
-        }]
+        } and not broad_text_exclusion.match(part)]
         for rule in REQUESTED_TEXT_NEGATIVE.split(", "):
             if rule not in parts:
                 parts.append(rule)
