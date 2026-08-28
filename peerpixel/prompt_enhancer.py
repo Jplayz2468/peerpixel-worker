@@ -5,8 +5,6 @@ import json
 import hashlib
 import re
 
-MAX_NEW_TOKENS = 192
-
 COMMON_NEGATIVE = (
     "blurry, low detail, malformed anatomy, distorted hands, extra limbs, "
     "duplicate subjects, logos, signatures, "
@@ -28,7 +26,9 @@ STYLE_NEGATIVES = {
 }
 
 SYSTEM_INSTRUCTION = """You are an expert prompt optimizer for FLUX image models.
-Output ONLY one valid compact JSON object with exactly one string field: "prompt". No markdown, preamble, negative prompt, or additional keys. Write the prompt as 1–2 dense sentences of concrete image-model instructions.
+Output ONLY one valid JSON object with exactly three string fields: "style", "prompt", and "negative_prompt". No markdown, preamble, or additional keys.
+
+The "prompt" is the complete wanted-content conditioning for this candidate. The "negative_prompt" is the complete unwanted-content conditioning for the same candidate: include relevant universal quality protections and scene-specific likely failures. Never negate anything the user requested. There is no application-selected sentence, character, item, or output-token limit; use only as much detail as improves control within the model context window.
 
 Behavior:
 - If the user's prompt is simple, short, or underspecified: invent a coherent, original visual concept rather than only decorating the given words. Describe literal, externally visible facts: the subject's complete appearance or design, clothing and accessories when applicable, exact action or pose, setting and background elements, spatial composition, lighting direction and quality, weather or time, colors, materials, and surface textures. Make bold but plausible visual choices that turn inputs such as "a man" into a fully specified scene. Do not merely restate the subject and append the style directive.
@@ -41,10 +41,7 @@ Behavior:
 - When visible text is explicitly requested on a sign, poster, cover, label, screen, garment, title, caption, or similar surface: reproduce its exact spelling and capitalization in double quotes. Describe the physical surface plus typography, placement, material, contrast, and legibility so FLUX treats the words as part of the composition. Never paraphrase, translate, extend, or invent copy. Spoken dialogue is not visible image text unless the user requests a speech bubble, subtitle, or caption.
 - Develop the scene concept before applying the one required style supplied with the request. Never borrow characteristics from a different style."""
 
-AUTO_SYSTEM_INSTRUCTION = SYSTEM_INSTRUCTION.replace(
-    'exactly one string field: "prompt"',
-    'exactly two string fields: "style" and "prompt"',
-) + """
+AUTO_SYSTEM_INSTRUCTION = SYSTEM_INSTRUCTION + """
 - Choose exactly one style from: photoreal, anime, vector, cinematic, watercolor, illustration, pixel_art. Put its lowercase name in "style". Choose the style that best serves the subject and concept; do not default mechanically to photoreal."""
 
 STYLES = ("photoreal", "anime", "vector", "cinematic", "watercolor",
@@ -162,15 +159,11 @@ def parse_enhancement(text: str, *, fallback_prompt: str,
         prompt = prompt.rstrip().rstrip(".!?") + (
             f', featuring exact visible text {exact} with clear, correctly spelled typography.'
         )
-    # Model instructions are not a dependable output boundary. Keep the first
-    # two complete sentences so an over-creative response cannot bloat every
-    # diffusion request; preserve a trailing fragment when there are fewer.
-    ends = list(re.finditer(r"[.!?](?=\s|$)", prompt))
-    if len(ends) >= 2:
-        prompt = prompt[:ends[1].end()].strip()
     if visible_text:
         parts = [part.strip() for part in negative.split(",") if part.strip()]
-        parts = [part for part in parts if part.lower() not in {"unintended text", "letters"}]
+        parts = [part for part in parts if part.lower() not in {
+            "unintended text", "text", "letters", "typography",
+        }]
         for rule in REQUESTED_TEXT_NEGATIVE.split(", "):
             if rule not in parts:
                 parts.append(rule)
@@ -223,8 +216,8 @@ def enhancement_messages(prompt: str, style: str) -> list[dict[str, str]]:
         {"role": "user", "content": (
             f"{chosen}\nUser prompt: {prompt.strip()}\n" +
             text_instruction +
-            "Do not output a negative prompt; it is added deterministically after generation.\n"
-            f"Never introduce anything contradicted by these exclusions: {template}\n"
+            "Write a complete negative_prompt for this exact candidate. Use these baseline quality "
+            f"protections where relevant and add scene-specific failure modes: {template}\n"
             "FINAL AND HIGHEST-PRIORITY REQUIREMENT:\n" + style_instruction
         )},
     ]
@@ -250,23 +243,35 @@ class PromptEnhancer:
         self.model = AutoModelForCausalLM.from_pretrained(
             path, local_files_only=True, device_map="cpu")
 
-    def _generate_text(self, messages, *, max_new_tokens: int, seed: int) -> str:
+    def _generate_text(self, messages, *, seed: int, temperature: float,
+                       top_p: float, repetition_penalty: float) -> str:
         import torch
 
         text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
         )
         inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
+        context = int(getattr(self.model.config, "max_position_embeddings", 0) or 0)
+        used = int(inputs.input_ids.shape[-1])
+        if context <= used:
+            raise RuntimeError("prompt_model_context_exhausted")
+        options = {"max_new_tokens": context - used}
+        if temperature > 0:
+            options.update(
+                do_sample=True, temperature=temperature, top_p=top_p,
+                repetition_penalty=repetition_penalty,
+            )
+        else:
+            options["do_sample"] = False
         with torch.random.fork_rng():
             torch.manual_seed(seed)
-            output = self.model.generate(
-                **inputs, max_new_tokens=max_new_tokens, do_sample=False,
-            )
+            output = self.model.generate(**inputs, **options)
         generated = output[0][inputs.input_ids.shape[-1]:]
         return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
     def enhance_pair(self, prompt: str, style: str, *, enabled=True, resolved=None,
-                     resolved_negative=None) -> dict[str, str]:
+                     resolved_negative=None, temperature=0.7, top_p=0.9,
+                     repetition_penalty=1.05, seed=None) -> dict[str, str]:
         if resolved and style != "auto":
             return {"prompt": str(resolved).strip(),
                     "negativePrompt": str(resolved_negative or "").strip()}
@@ -283,8 +288,9 @@ class PromptEnhancer:
         visible_text = requested_visible_text(prompt)
         messages = enhancement_messages(prompt, style)
         generated_text = self._generate_text(
-            messages, max_new_tokens=MAX_NEW_TOKENS,
-            seed=sampling_seed(prompt, style),
+            messages, seed=(sampling_seed(prompt, style) if seed is None else int(seed)),
+            temperature=float(temperature), top_p=float(top_p),
+            repetition_penalty=float(repetition_penalty),
         )
         if not generated_text:
             raise RuntimeError("prompt_enhancement_empty")
@@ -297,7 +303,8 @@ class PromptEnhancer:
         )
         chosen_style = parsed.get("style", style)
         parsed["prompt"] = with_style_suffix(parsed["prompt"], chosen_style)
-        parsed["negativePrompt"] = negative_template(chosen_style, visible_text)
+        if not parsed["negativePrompt"]:
+            parsed["negativePrompt"] = negative_template(chosen_style, visible_text)
         if not enabled:
             parsed["prompt"] = prompt.strip()
         elif resolved:

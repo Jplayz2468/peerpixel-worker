@@ -83,16 +83,21 @@ class StyledPipelineTests(unittest.TestCase):
         ensure.assert_called_once_with("nsfw-image-detection")
         self.assertEqual(pipeline.call_args.kwargs["model"], "/hf/safety")
 
-    def test_positive_prompt_is_hard_limited_to_two_sentences(self):
+    def test_model_prompts_are_not_artificially_truncated(self):
+        negative = ", ".join(f"failure mode {index}" for index in range(40))
         parsed = parse_enhancement(
-            '{"prompt":"First sentence. Second sentence! Third sentence must go.",'
-            '"negative_prompt":"watermark"}',
+            '{"prompt":"First sentence. Second sentence! Third sentence stays.",'
+            f'"negative_prompt":"{negative}"}}',
             fallback_prompt="fallback", fallback_negative="blur",
         )
-        self.assertEqual(parsed["prompt"], "First sentence. Second sentence!")
+        self.assertEqual(
+            parsed["prompt"],
+            "First sentence. Second sentence! Third sentence stays.",
+        )
+        self.assertEqual(parsed["negativePrompt"], negative)
 
     def test_exact_prompt_instruction_and_bypass_paths(self):
-        self.assertIn('exactly one string field: "prompt"', SYSTEM_INSTRUCTION)
+        self.assertIn('exactly three string fields: "style", "prompt", and "negative_prompt"', SYSTEM_INSTRUCTION)
         enhancer = PromptEnhancer()
         bypassed = enhancer.enhance(" raw prompt ", "photoreal", enabled=False)
         self.assertTrue(bypassed.startswith("raw prompt,"))
@@ -131,14 +136,19 @@ class StyledPipelineTests(unittest.TestCase):
             "negativePrompt": "watermark, duplicate people",
         })
 
-    def test_live_enhancement_uses_deterministic_negative_even_if_qwen_adds_one(self):
+    def test_model_owns_a_valid_negative_prompt(self):
         enhancer = PromptEnhancer()
         enhancer.warm = lambda: None
         enhancer._generate_text = lambda *_args, **_kwargs: (
-            '{"prompt":"A neon diner.","negative_prompt":"ignore me"}'
+            '{"style":"cinematic","prompt":"A glass tower at dusk.",'
+            '"negative_prompt":"fisheye distortion, duplicate towers, green sky"}'
         )
-        result = enhancer.enhance_pair("a diner", "cinematic")
-        self.assertEqual(result["negativePrompt"], negative_template("cinematic"))
+        result = enhancer.enhance_pair("glass tower", "auto")
+        self.assertIn("glass tower", result["prompt"].lower())
+        self.assertEqual(
+            result["negativePrompt"],
+            "fisheye distortion, duplicate towers, green sky",
+        )
 
     def test_double_encoded_json_prompt_is_unwrapped(self):
         parsed = parse_enhancement(
@@ -225,7 +235,7 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertNotEqual(first, sampling_seed("another man", "cinematic"))
         self.assertNotEqual(first, sampling_seed("a man", "anime"))
 
-    def test_generation_uses_greedy_decoding_to_avoid_language_corruption(self):
+    def test_generation_uses_remaining_model_context_without_an_app_token_cap(self):
         import torch
         from transformers import BatchEncoding
 
@@ -236,12 +246,21 @@ class StyledPipelineTests(unittest.TestCase):
             "input_ids": torch.tensor([[1, 2]]),
         })
         enhancer.tokenizer.decode.return_value = '{"prompt":"clean"}'
-        enhancer.model = mock.Mock(device=torch.device("cpu"))
+        enhancer.model = mock.Mock(
+            device=torch.device("cpu"),
+            config=types.SimpleNamespace(max_position_embeddings=8192),
+        )
         enhancer.model.generate.return_value = torch.tensor([[1, 2, 3]])
 
-        enhancer._generate_text([], max_new_tokens=10, seed=7)
+        enhancer._generate_text(
+            [], seed=7, temperature=0.7, top_p=0.9,
+            repetition_penalty=1.05,
+        )
 
-        self.assertFalse(enhancer.model.generate.call_args.kwargs["do_sample"])
+        options = enhancer.model.generate.call_args.kwargs
+        self.assertEqual(options["max_new_tokens"], 8190)
+        self.assertTrue(options["do_sample"])
+        self.assertEqual(options["temperature"], 0.7)
 
     def test_vague_prompts_use_one_style_aware_generation_pass(self):
         enhancer = PromptEnhancer()
