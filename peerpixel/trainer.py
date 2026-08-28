@@ -429,8 +429,6 @@ def _train_with_trl(lease: TrainingLease, rows: list[dict], _evaluation_rows: li
         gradient_checkpointing=True,
         max_length=512,
         loss_type="sigmoid",
-        model_adapter_name="default",
-        ref_adapter_name="reference",
         save_strategy="no",
         eval_strategy="no",
         logging_steps=5,
@@ -447,6 +445,8 @@ def _train_with_trl(lease: TrainingLease, rows: list[dict], _evaluation_rows: li
         processing_class=tokenizer,
         data_collator=WeightedPreferenceCollator(
             pad_token_id=tokenizer.pad_token_id),
+        model_adapter_name="default",
+        ref_adapter_name="reference",
     )
     result = trainer.train()
     model.set_adapter("default")
