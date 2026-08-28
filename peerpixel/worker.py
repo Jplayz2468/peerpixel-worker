@@ -542,22 +542,33 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
             "progress": max(0.0, min(1.0, progress))}))
     if stage == "enhance":
         milestone("loading_prompt_model", .02)
+        # A CUDA worker cannot keep FLUX and the prompt model resident together
+        # reliably. Prompt work is drained as a batch, so release FLUX once and
+        # let Qwen use the accelerator for all four directions.
+        renderer.unload()
         from .prompt_enhancer import PromptEnhancer
         enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer(
             adapter_path=config.read().get("promptAdapter"))
         renderer._enhancer = enhancer
         milestone("exploring_prompts", .12)
-        prompts = enhancer.enhance_batch(
+        pairs = enhancer.enhance_pairs_batch(
             task["prompt"], count=int(task.get("count", 4)),
             sampling=task.get("sampling"), mode=task.get("mode", "broad"),
         )
+        prompts = [pair["prompt"] for pair in pairs]
+        negative_prompts = [pair["negativePrompt"] for pair in pairs]
         link.send(json.dumps({"type": "task_result", "taskId": task["id"],
             "stage": "enhance", "assignmentToken": token, "prompt": prompts[0],
-            "prompts": prompts,
+            "negativePrompt": negative_prompts[0], "prompts": prompts,
+            "negativePrompts": negative_prompts,
             "provenance": enhancer.provenance}))
         return
 
     from .safety import SafetyClassifier
+    enhancer = getattr(renderer, "_enhancer", None)
+    if enhancer is not None:
+        enhancer.unload()
+        renderer._enhancer = None
     milestone("loading_flux", .01)
     source = None
     if task.get("sourceUrl"):

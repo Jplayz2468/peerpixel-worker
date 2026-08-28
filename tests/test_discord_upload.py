@@ -32,7 +32,12 @@ class DiscordUploadTests(unittest.TestCase):
     def test_enhancement_injects_the_machine_local_adapter(self, _read, enhancer_type):
         renderer = self.renderer()
         renderer._enhancer = None
-        enhancer_type.return_value.enhance_batch.return_value = ["one", "two", "three", "four"]
+        enhancer_type.return_value.enhance_pairs_batch.return_value = [
+            {"prompt": "one", "negativePrompt": "bad one"},
+            {"prompt": "two", "negativePrompt": "bad two"},
+            {"prompt": "three", "negativePrompt": "bad three"},
+            {"prompt": "four", "negativePrompt": "bad four"},
+        ]
         enhancer_type.return_value.provenance = "bootstrap-0002"
         link = Link()
         worker._discord_task(link, {"id": "job", "stage": "enhance", "count": 4,
@@ -43,6 +48,8 @@ class DiscordUploadTests(unittest.TestCase):
                       if json.loads(message).get("type") == "task_result")
         self.assertEqual(result["provenance"], "bootstrap-0002")
         self.assertEqual(result["prompts"], ["one", "two", "three", "four"])
+        self.assertEqual(result["negativePrompts"], ["bad one", "bad two", "bad three", "bad four"])
+        renderer.unload.assert_called_once_with()
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")

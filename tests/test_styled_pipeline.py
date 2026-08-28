@@ -80,6 +80,43 @@ class StyledPipelineTests(unittest.TestCase):
             safety.warm()
         self.assertEqual(pipeline.call_args.kwargs["device"], -1)
 
+    def test_prompt_model_uses_cuda_when_a_cuda_worker_is_available(self):
+        enhancer = PromptEnhancer(model_path="/models/qwen")
+        fake_model = object()
+        with mock.patch("torch.cuda.is_available", return_value=True), \
+             mock.patch("transformers.AutoTokenizer.from_pretrained", return_value=object()), \
+             mock.patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=fake_model) as load:
+            enhancer.warm()
+        self.assertEqual(load.call_args.kwargs["device_map"], "cuda")
+
+    def test_batched_lora_json_preserves_aligned_positive_and_negative_prompts(self):
+        import torch
+        from transformers import BatchEncoding
+
+        enhancer = PromptEnhancer()
+        enhancer.warm = lambda: None
+        enhancer.tokenizer = mock.Mock()
+        enhancer.tokenizer.apply_chat_template.return_value = "chat"
+        enhancer.tokenizer.return_value = BatchEncoding({
+            "input_ids": torch.tensor([[1, 2], [1, 2], [1, 2], [1, 2]]),
+            "attention_mask": torch.tensor([[1, 1], [1, 1], [1, 1], [1, 1]]),
+        })
+        enhancer.tokenizer.decode.side_effect = [
+            json.dumps({"prompt": f"scene {index}", "negative_prompt": f"defect {index}"})
+            for index in range(4)
+        ]
+        enhancer.model = mock.Mock(device=torch.device("cpu"))
+        enhancer.model.generate.return_value = torch.tensor([
+            [1, 2, 3], [1, 2, 4], [1, 2, 5], [1, 2, 6],
+        ])
+
+        pairs = enhancer.enhance_pairs_batch("fox", count=4)
+
+        self.assertEqual(pairs, [
+            {"prompt": f"scene {index}", "negativePrompt": f"defect {index}"}
+            for index in range(4)
+        ])
+
     def test_prompt_model_is_released_before_flux_uses_the_accelerator(self):
         events = []
 

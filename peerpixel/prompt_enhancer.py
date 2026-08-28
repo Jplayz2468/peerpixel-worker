@@ -269,6 +269,7 @@ class PromptEnhancer:
     def warm(self):
         if self.model is not None:
             return
+        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         from . import model_hub
 
@@ -282,11 +283,13 @@ class PromptEnhancer:
             self._adapter_manifest = manifest
         path = self.model_path or model_hub.ensure("qwen3-1.7b")
         self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
-        # Keep the small language model on CPU. On Apple silicon, "auto" puts
-        # it in unified GPU memory beside FLUX; the resulting pressure makes
-        # the last diffusion step and VAE decode swap for minutes.
+        # CUDA workers release FLUX before enhancement, so the small language
+        # model can use the GPU without competing for VRAM. Non-CUDA workers
+        # retain the portable CPU path (especially important on unified-memory
+        # Apple systems, where sharing with FLUX can make decode swap).
+        device_map = "cuda" if torch.cuda.is_available() else "cpu"
         base = AutoModelForCausalLM.from_pretrained(
-            path, local_files_only=True, device_map="cpu")
+            path, local_files_only=True, device_map=device_map)
         if self.adapter_path:
             from peft import PeftModel
             self.model = PeftModel.from_pretrained(base, self.adapter_path)
@@ -308,8 +311,9 @@ class PromptEnhancer:
         generated = output[0][inputs.input_ids.shape[-1]:]
         return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
-    def enhance_batch(self, prompt: str, *, count: int = 4,
-                      sampling: dict | None = None, mode: str = "broad") -> list[str]:
+    def enhance_pairs_batch(self, prompt: str, *, count: int = 4,
+                            sampling: dict | None = None,
+                            mode: str = "broad") -> list[dict[str, str]]:
         """Explore several prompt directions in one model pass.
 
         Sampling policy comes from the coordinator, so changing exploration
@@ -344,18 +348,22 @@ class PromptEnhancer:
             )
         width = inputs.input_ids.shape[-1]
         visible_text = requested_visible_text(prompt)
-        prompts = []
+        pairs = []
         for output in outputs:
             generated = self.tokenizer.decode(output[width:], skip_special_tokens=True).strip()
-            invalid = (not generated or generated.startswith(("{", "[", "```"))
+            invalid = (not generated or generated.startswith(("[", "```"))
                        or generated.lower().startswith(("here is", "enhanced prompt", "prompt:")))
             if invalid:
                 generated = prompt.strip()
-            prompts.append(parse_enhancement(
+            pairs.append(parse_enhancement(
                 generated, fallback_prompt=prompt, fallback_negative=COMMON_NEGATIVE,
-                visible_text=visible_text,
-            )["prompt"])
-        return prompts
+                visible_text=visible_text))
+        return pairs
+
+    def enhance_batch(self, prompt: str, *, count: int = 4,
+                      sampling: dict | None = None, mode: str = "broad") -> list[str]:
+        return [pair["prompt"] for pair in self.enhance_pairs_batch(
+            prompt, count=count, sampling=sampling, mode=mode)]
 
     def enhance_pair(self, prompt: str, style: str, *, enabled=True, resolved=None,
                      resolved_negative=None) -> dict[str, str]:
