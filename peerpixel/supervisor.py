@@ -83,12 +83,13 @@ class RuntimePolicy:
     max_age_seconds: float = 86400
     shutdown_grace_seconds: float = 10
     accelerator_idle_watermark: int = 0
+    max_swap_bytes: int = 512 * 1024 * 1024
 
     def recycle_reason(self, state: RuntimeState, *, now: float,
                        physical_memory: int) -> str | None:
         if not state.idle:
             return None
-        if state.memory.swap_bytes > 0:
+        if state.memory.swap_bytes > self.max_swap_bytes:
             return "runtime_swap"
         if physical_memory > 0 and state.memory.rss_bytes > physical_memory * .9:
             return "runtime_rss"

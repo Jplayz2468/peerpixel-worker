@@ -22,8 +22,8 @@ class RuntimeStateTests(unittest.TestCase):
         self.assertEqual((state.phase, state.deadline), ("safety_check", 60))
 
     def test_health_recycling_happens_only_while_idle(self):
-        policy = RuntimePolicy(max_renders=100, max_age_seconds=86400)
-        unhealthy = MemorySnapshot(rss_bytes=95, swap_bytes=1, accelerator_bytes=0)
+        policy = RuntimePolicy(max_renders=100, max_age_seconds=86400, max_swap_bytes=10)
+        unhealthy = MemorySnapshot(rss_bytes=95, swap_bytes=11, accelerator_bytes=0)
         busy = RuntimeState(started_at=0, idle=False, completed=100, memory=unhealthy)
         idle = RuntimeState(started_at=0, idle=True, completed=100, memory=unhealthy)
         self.assertIsNone(policy.recycle_reason(busy, now=90000, physical_memory=100))
@@ -32,9 +32,9 @@ class RuntimeStateTests(unittest.TestCase):
 
     def test_every_recycling_threshold_has_a_stable_reason(self):
         policy = RuntimePolicy(max_renders=100, max_age_seconds=86400,
-                               accelerator_idle_watermark=20)
+                               accelerator_idle_watermark=20, max_swap_bytes=10)
         cases = [
-            (RuntimeState(0, idle=True, memory=MemorySnapshot(1, 1, 0)), 1, "runtime_swap"),
+            (RuntimeState(0, idle=True, memory=MemorySnapshot(1, 11, 0)), 1, "runtime_swap"),
             (RuntimeState(0, idle=True, memory=MemorySnapshot(91, 0, 0)), 100, "runtime_rss"),
             (RuntimeState(0, idle=True, memory=MemorySnapshot(1, 0, 21)), 100, "runtime_accelerator"),
             (RuntimeState(0, idle=True, completed=100), 100, "runtime_task_limit"),
@@ -46,6 +46,13 @@ class RuntimeStateTests(unittest.TestCase):
                 physical = value if reason == "runtime_rss" else 100
                 self.assertEqual(policy.recycle_reason(state, now=now,
                                                        physical_memory=physical), reason)
+
+    def test_small_background_swap_does_not_recycle_a_healthy_runtime(self):
+        policy = RuntimePolicy(max_swap_bytes=512 * 1024 * 1024)
+        state = RuntimeState(0, idle=True,
+                             memory=MemorySnapshot(400_000_000, 50 * 1024 * 1024, 0))
+        self.assertIsNone(policy.recycle_reason(
+            state, now=1, physical_memory=32 * 1024 * 1024 * 1024))
 
 
 class BackoffTests(unittest.TestCase):
