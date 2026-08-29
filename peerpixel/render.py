@@ -369,7 +369,7 @@ def operation_of(job: dict) -> dict:
         width = int(job.get("width", spec["width"]))
         height = int(job.get("height", spec["height"]))
         steps = int(job.get("steps", spec["steps"]))
-        max_side, max_pixels, min_side, step_range = ((1024, 1024 * 1024, 512, (20, 60))
+        max_side, max_pixels, min_side, step_range = ((1024, 1024 * 1024, 256, (20, 60))
             if name == "refine" else (512, 512 * 512, 256, (8, 32)))
         if (width % 8 or height % 8 or min(width, height) < min_side
                 or max(width, height) > max_side or width * height > max_pixels
@@ -411,9 +411,20 @@ EDIT_STRENGTHS = {
     # The coordinator owns product tuning. Workers enforce only a broad safety
     # envelope so strength changes do not require a fleet update.
     "vary": (0.15, 0.95, 0.65),
-    "refine": (0.10, 0.75, 0.12),
+    "refine": (0.15, 0.35, 0.20),
     "inpaint": (0.35, 0.85, 0.65),
 }
+
+
+def scheduled_edit_steps(actual_steps: int, strength: float) -> int:
+    """Compensate for img2img strength truncation so requested steps are real."""
+    import math
+    return max(int(actual_steps), int(math.ceil(int(actual_steps) / float(strength))))
+
+
+def edit_backend(mode: str) -> str:
+    """Use source-conditioned diffusion for edits and detail refinement."""
+    return "inpaint"
 
 
 def edit_spec(job: dict) -> dict | None:
@@ -948,12 +959,38 @@ class Renderer:
                 job.get("_editSource", b""), job.get("_editMask"),
                 mode=editing["mode"], width=width, height=height,
             )
-            pipeline_args.update(image=source, mask_image=mask, strength=editing["strength"])
-            image = self.edit_pipeline()(**pipeline_args).images[0]
+            if edit_backend(editing["mode"]) == "reference" and job.get("upscaleMethod") != "img2img":
+                # Klein's native pipeline conditions on the selected image but
+                # still generates fresh 1024-scale latents for all 50 steps.
+                # This creates real detail instead of repainting a white mask.
+                pipeline_args["image"] = source
+                image = self.pipe(**pipeline_args).images[0]
+            else:
+                pipeline_args.update(image=source, mask_image=mask, strength=editing["strength"],
+                                     num_inference_steps=scheduled_edit_steps(
+                                         steps, editing["strength"]))
+                image = self.edit_pipeline()(**pipeline_args).images[0]
         else:
             # Ordinary generation starts from portable CPU-seeded noise.
-            pipeline_args["latents"] = seeded_latents(
-                self.pipe, spec, job.get("seed", 0), self._dtype)
+            latents = seeded_latents(self.pipe, spec, job.get("seed", 0), self._dtype)
+            if job.get("noiseBlendSeed") is not None:
+                try:
+                    amount = max(.05, min(.8, float(job.get("noiseBlendStrength", .35))))
+                except (TypeError, ValueError):
+                    amount = .35
+                base_width = int(job.get("noiseBaseWidth", spec["width"]))
+                base_height = int(job.get("noiseBaseHeight", spec["height"]))
+                if (base_width, base_height) != (spec["width"], spec["height"]):
+                    import torch.nn.functional as functional
+                    base_spec = {**spec, "width": base_width, "height": base_height}
+                    latents = seeded_latents(self.pipe, base_spec, job.get("seed", 0), self._dtype)
+                    latents = functional.interpolate(latents, size=(latent_grid(self.pipe, spec["height"]),
+                        latent_grid(self.pipe, spec["width"])), mode="bilinear", align_corners=False)
+                    latents = latents / latents.float().std().clamp_min(1e-6).to(latents.dtype)
+                fresh = seeded_latents(self.pipe, spec, job["noiseBlendSeed"], self._dtype)
+                # Keep unit variance while interpolating the original and fresh noise fields.
+                latents = ((1 - amount) * latents + amount * fresh) / (((1 - amount) ** 2 + amount ** 2) ** .5)
+            pipeline_args["latents"] = latents
             if prompt_embeds is None:
                 pipeline_args["negative_prompt"] = job.get("negativePrompt", "")
             image = self.pipe(**pipeline_args).images[0]

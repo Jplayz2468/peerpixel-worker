@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import time
+import urllib.request
 
 from . import api, compare, config, console, plans, relay, settings, updater
 from .console import DIM, OFF, clock, say, step_line
@@ -535,49 +537,68 @@ def compose_grid(cells: list[bytes]) -> bytes:
 def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     token = task["assignmentToken"]
     stage = task["stage"]
+    def milestone(phase: str, progress: float) -> None:
+        link.send(json.dumps({"type": "progress", "taskId": task["id"],
+            "stage": stage, "assignmentToken": token, "phase": phase,
+            "progress": max(0.0, min(1.0, progress))}))
     if stage == "enhance":
+        milestone("loading_prompt_model", .02)
         from .prompt_enhancer import PromptEnhancer
-        enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer()
+        enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer(
+            adapter_path=config.read().get("promptAdapter"))
         renderer._enhancer = enhancer
-        pairs = enhancer.enhance_pairs(
-            task["prompt"], "auto", count=int(task.get("count", 1)),
-            sampling=task.get("sampling") or {},
+        milestone("exploring_prompts", .12)
+        pairs = enhancer.enhance_pairs_batch(
+            task["prompt"], count=int(task.get("count", 4)),
+            sampling=task.get("sampling"), mode=task.get("mode", "broad"),
+            on_progress=lambda done: milestone("exploring_prompts", .12 + .28 * done / 4),
         )
+        prompts = [pair["prompt"] for pair in pairs]
+        negative_prompts = [pair["negativePrompt"] for pair in pairs]
         link.send(json.dumps({"type": "task_result", "taskId": task["id"],
-            "stage": "enhance", "assignmentToken": token,
-            "prompt": pairs[0]["prompt"],
-            "negativePrompt": pairs[0]["negativePrompt"],
-            "prompts": [pair["prompt"] for pair in pairs],
-            "negativePrompts": [pair["negativePrompt"] for pair in pairs],
-            "provenance": "qwen"}))
+            "stage": "enhance", "assignmentToken": token, "prompt": prompts[0],
+            "negativePrompt": negative_prompts[0], "prompts": prompts,
+            "negativePrompts": negative_prompts,
+            "provenance": enhancer.provenance}))
         return
 
     from .safety import SafetyClassifier
+    enhancer = getattr(renderer, "_enhancer", None)
+    if enhancer is not None:
+        enhancer.unload()
+        renderer._enhancer = None
+    milestone("loading_flux", .01)
     source = None
     if task.get("sourceUrl"):
         source = api.source_image(task["sourceUrl"], device_id=device_id,
                                   assignment_token=token)
-    seeds = _action_seeds(task.get("seed", 0), int(task.get("outputCount", 1)))
+    output_count = int(task.get("outputCount", 1))
+    supplied_seeds = task.get("seeds")
+    if (task.get("operation") in ("grid", "vary") and isinstance(supplied_seeds, list)
+            and len(supplied_seeds) == output_count):
+        seeds = [int(seed) for seed in supplied_seeds]
+    elif output_count == 4:
+        # Compatibility fallback for coordinators that predate explicit seeds.
+        seeds = [int(task.get("seed", 0))] * output_count
+    else:
+        seeds = _action_seeds(task.get("seed", 0), output_count)
     prompts = task.get("prompts")
-    negative_prompts = task.get("negativePrompts")
-    if prompts is not None or negative_prompts is not None:
-        if (not isinstance(prompts, list) or not isinstance(negative_prompts, list)
-                or len(prompts) != len(seeds) or len(negative_prompts) != len(seeds)
-                or any(not isinstance(value, str) or not value.strip()
-                       for value in prompts + negative_prompts)):
-            raise ValueError("prompt_pair_count_mismatch")
+    if not isinstance(prompts, list) or len(prompts) != output_count:
+        prompts = [task["prompt"]] * output_count
     safety = getattr(renderer, "_safety", None) or SafetyClassifier()
     renderer._safety = safety
     rendered = []
     total_steps = max(1, int(task.get("steps", 1)) * len(seeds))
     completed_steps = 0
     for index, seed in enumerate(seeds):
-        positive = str(prompts[index] if prompts is not None else task["prompt"]).strip()
-        negative = str(negative_prompts[index] if negative_prompts is not None
-                       else task.get("negativePrompt") or "").strip()
         job = {**task, "seed": seed, "operation": task.get("operation", "grid"),
-               "prompt": positive, "negativePrompt": negative,
-               "enhance": False, "enhancedPrompt": positive}
+               "prompt": prompts[index], "enhance": False,
+               "enhancedPrompt": prompts[index]}
+        if task.get("baseSeed") is not None:
+            job.update(seed=int(task["baseSeed"]), noiseBlendSeed=seed,
+                       noiseBlendStrength=float(task.get("noiseBlendStrength", .35)),
+                       noiseBaseWidth=int(task.get("noiseBaseWidth", task.get("width", 512))),
+                       noiseBaseHeight=int(task.get("noiseBaseHeight", task.get("height", 512))))
         if source is not None:
             job.update(editMode=task["operation"], editStrength=task["strength"],
                        sourceImageId=task.get("sourceImageId"), _editSource=source)
@@ -585,24 +606,34 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
             link.send(json.dumps({"type": "progress", "taskId": task["id"],
                 "stage": "render", "assignmentToken": token,
                 "progress": min(1.0, (offset + done) / total_steps)}))
-        image = renderer.render(job, on_step=progress)
+        def phase(name):
+            mapped = name if name in {"encoding_prompt", "rendering", "decoding"} else "loading_flux"
+            milestone(mapped, min(.9, completed_steps / total_steps + .01))
+        image = renderer.render(job, on_step=progress, on_phase=phase)
+        milestone("safety_check", min(.92, (completed_steps + int(task.get("steps", 1))) / total_steps))
         rendered.append((image, {"moderation": safety.classify(image)}))
         completed_steps += int(task.get("steps", 1))
-    link.send(json.dumps({"type": "task_result", "taskId": task["id"],
-        "stage": "render", "assignmentToken": token, "resultId": task["id"]}))
     grid = None
     if len(rendered) == 4:
+        milestone("composing_grid", .94)
         scores = [float(item[1]["moderation"].get("nsfwScore", 0.0) or 0.0) for item in rendered]
         unsafe = any(item[1]["moderation"].get("label") == "nsfw" for item in rendered)
         grid = (compose_grid([item[0] for item in rendered]), {"moderation": {
             "label": "nsfw" if unsafe else "normal", "nsfwScore": max(scores, default=0.0),
         }})
+    milestone("uploading", .97)
+    link.send(json.dumps({"type": "task_result", "taskId": task["id"],
+        "stage": "render", "assignmentToken": token, "resultId": task["id"]}))
     # The socket result creates the upload lease. A very short retry handles
     # propagation without ever accepting a stale assignment.
     last_error = None
     for attempt in range(5):
         try:
             api.submit_discord_result(task, device_id, rendered, grid)
+            # Release FLUX after the result is safely delivered. Doing this at
+            # the start of the next enhancement made users wait at 2% while a
+            # large CUDA pipeline was synchronously collected.
+            renderer.unload()
             return
         except api.ApiError as error:
             last_error = error
@@ -620,7 +651,104 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     api.report_discord_result_failure(task, device_id, reason)
 
 
-def run(renderer, once: bool = False) -> int:
+def build_trainer_capability(saved: dict, renderer, *, client=None):
+    """Build the inert-by-default trainer used only during socket idle time."""
+    from .trainer import TrainerCapability, TrainingHttpClient
+
+    options = saved.get("promptTrainer")
+    options = options if isinstance(options, dict) else {}
+    enabled = options.get("enabled") is True
+
+    def active_adapter():
+        return config.read().get("promptAdapter")
+
+    def release_models():
+        renderer.unload()
+        enhancer = getattr(renderer, "_enhancer", None)
+        if enhancer is not None:
+            enhancer.unload()
+
+    def activate(candidate, _response):
+        # The coordinator response is the promotion authority. Only this
+        # callback, invoked after promoted:true, moves the local runtime pointer.
+        config.write(promptAdapter=str(candidate))
+        enhancer = getattr(renderer, "_enhancer", None)
+        if enhancer is not None:
+            enhancer.unload()
+            renderer._enhancer = None
+
+    root = options.get("stagingRoot") or config.HOME / "training" / "candidates"
+    return TrainerCapability(
+        client or TrainingHttpClient(), device_id=str(saved.get("deviceId") or ""),
+        enabled=enabled, active_adapter=active_adapter, staging_root=root,
+        on_training_start=release_models, on_promoted=activate,
+    )
+
+
+def send_idle_heartbeat(link) -> None:
+    """Keep the existing socket alive without creating an HTTP request."""
+    link.send(json.dumps({"type": "heartbeat"}))
+
+
+def handle_training_signal(message: dict, trainer_capability) -> bool:
+    """Claim training only after the coordinator says a queued run exists."""
+    if message.get("type") not in ("welcome", "ack") or message.get("trainingAvailable") is not True:
+        return False
+    return trainer_capability.poll_when_idle()
+
+
+def handle_comparison_signal(message: dict, renderer, saved: dict) -> bool:
+    """Run owner-only benchmark work only after a socket signal."""
+    if message.get("type") not in ("welcome", "ack") or message.get("comparisonAvailable") is not True:
+        return False
+    from .comparison import ComparisonClient, run_comparison
+    client = ComparisonClient(str(saved.get("deviceId") or ""))
+    try:
+        lease = client.lease()
+    except Exception:
+        return False
+    return bool(lease and run_comparison(client, lease, renderer))
+
+
+def handle_bootstrap_signal(message: dict, saved: dict) -> bool:
+    """Register the trainer's validated local bootstrap artifact once."""
+    if message.get("type") not in ("welcome", "ack") or message.get("bootstrapRequired") is not True:
+        return False
+    from pathlib import Path
+    from .trainer import package_candidate
+    requested = str(message.get("bootstrapVersion") or "")
+    adapter = config.read().get("promptAdapter")
+    if not adapter:
+        return False
+    root = Path(adapter)
+    try:
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        if manifest.get("version") != requested or manifest.get("kind") != "bootstrap":
+            for manifest_path in config.HOME.rglob("manifest.json"):
+                candidate = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if candidate.get("version") == requested and candidate.get("kind") == "bootstrap":
+                    root, manifest = manifest_path.parent, candidate
+                    break
+        artifact = package_candidate(root)
+        version = requested or str(manifest.get("version") or "")
+        token = config.read().get("token", "")
+        request = urllib.request.Request(f"{config.API}/api/worker/training/bootstrap",
+            data=artifact, method="PUT", headers={
+                "user-agent": api.USER_AGENT, "authorization": f"Bearer {token}",
+                "content-type": "application/zip",
+                "x-peerpixel-device": str(saved.get("deviceId") or ""),
+                "x-peerpixel-bootstrap-version": version,
+                "x-peerpixel-artifact-digest": hashlib.sha256(artifact).hexdigest(),
+                "x-peerpixel-manifest": base64.b64encode(json.dumps(manifest, separators=(",", ":")).encode()).decode(),
+            })
+        with urllib.request.urlopen(request, timeout=900):
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def run(renderer, once: bool = False, trainer_capability=None) -> int:
     """Serve the compact Discord-first enhancement/render protocol."""
     from urllib.parse import quote
     saved = config.read()
@@ -630,10 +758,15 @@ def run(renderer, once: bool = False) -> int:
         from websockets.sync.client import connect
     except ImportError:
         raise SystemExit("missing dependency: run `peerpixel setup`") from None
-    capabilities = quote(json.dumps({"enhance": True, "render": True}, separators=(",", ":")))
+    trainer_capability = trainer_capability or build_trainer_capability(saved, renderer)
+    advertised = {"enhance": True, "render": True}
+    if "train" in trainer_capability.capabilities:
+        advertised["train"] = True
+    capabilities = quote(json.dumps(advertised, separators=(",", ":")))
     url = (config.API.replace("http", "ws", 1) + "/api/worker/connect"
            + f"?deviceId={quote(str(saved['deviceId']))}&capabilities={capabilities}"
            + f"&accelerator={quote(str(saved.get('accelerator', 'unknown')))}&enhancerLoaded=0"
+           + f"&version={quote(updater.installed())}"
            + f"&renderEstimateMs={int(saved.get('benchMs') or 0)}")
     headers = {"authorization": f"Bearer {saved['token']}", "user-agent": api.USER_AGENT}
     completed = 0
@@ -648,10 +781,16 @@ def run(renderer, once: bool = False) -> int:
                     try:
                         raw = link.recv(timeout=HEARTBEAT_SECONDS)
                     except TimeoutError:
-                        link.send(json.dumps({"type": "heartbeat"}))
+                        send_idle_heartbeat(link)
                         continue
                     message = json.loads(raw) if isinstance(raw, str) else {}
                     if handle_idle_control(message):
+                        continue
+                    if handle_bootstrap_signal(message, saved):
+                        continue
+                    if handle_comparison_signal(message, renderer, saved):
+                        continue
+                    if handle_training_signal(message, trainer_capability):
                         continue
                     if message.get("type") != "task":
                         continue

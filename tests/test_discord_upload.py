@@ -27,67 +27,76 @@ class DiscordUploadTests(unittest.TestCase):
         renderer.render.return_value = b"jpeg"
         return renderer
 
-    def test_enhancement_returns_four_aligned_prompt_pairs(self):
+    @mock.patch("peerpixel.prompt_enhancer.PromptEnhancer")
+    @mock.patch("peerpixel.config.read", return_value={"promptAdapter": "/models/bootstrap"})
+    def test_enhancement_injects_the_machine_local_adapter(self, _read, enhancer_type):
         renderer = self.renderer()
-        renderer._enhancer = mock.Mock()
-        renderer._enhancer.enhance_pairs.return_value = [
-            {"prompt": f"positive {index}", "negativePrompt": f"negative {index}"}
-            for index in range(1, 5)
+        renderer._enhancer = None
+        enhancer_type.return_value.enhance_pairs_batch.return_value = [
+            {"prompt": "one", "negativePrompt": "bad one"},
+            {"prompt": "two", "negativePrompt": "bad two"},
+            {"prompt": "three", "negativePrompt": "bad three"},
+            {"prompt": "four", "negativePrompt": "bad four"},
         ]
+        enhancer_type.return_value.provenance = "bootstrap-0002"
         link = Link()
-        task = {"id": "job-1", "stage": "enhance", "assignmentToken": "lease-1",
-                "prompt": "city", "count": 4,
-                "sampling": {"temperatures": [0.4, 0.6, 0.8, 1.0]}}
-
-        worker._discord_task(link, task, renderer, "device")
-
-        result = json.loads(link.sent[-1])
-        self.assertEqual(result["prompts"],
-                         ["positive 1", "positive 2", "positive 3", "positive 4"])
-        self.assertEqual(result["negativePrompts"],
-                         ["negative 1", "negative 2", "negative 3", "negative 4"])
+        worker._discord_task(link, {"id": "job", "stage": "enhance", "count": 4,
+            "mode": "broad", "sampling": {"temperature": .9},
+            "assignmentToken": "lease", "prompt": "fox"}, renderer, "device")
+        enhancer_type.assert_called_once_with(adapter_path="/models/bootstrap")
+        result = next(json.loads(message) for message in link.sent
+                      if json.loads(message).get("type") == "task_result")
+        self.assertEqual(result["provenance"], "bootstrap-0002")
+        self.assertEqual(result["prompts"], ["one", "two", "three", "four"])
+        self.assertEqual(result["negativePrompts"], ["bad one", "bad two", "bad three", "bad four"])
+        renderer.unload.assert_not_called()
+        progress = [json.loads(message)["progress"] for message in link.sent
+                    if json.loads(message).get("type") == "progress"]
+        self.assertGreaterEqual(len(progress), 2)
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")
-    def test_render_indexes_positive_and_negative_arrays_together(self, _submit, safety_type):
-        safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
-        renderer = self.renderer()
+    def test_initial_grid_uses_coordinator_seeds_for_four_prompts(self, submit, safety_type):
         output = io.BytesIO()
-        Image.new("RGB", (32, 24), "purple").save(output, "JPEG")
+        Image.new("RGB", (16, 16), "blue").save(output, "JPEG")
+        renderer = self.renderer()
         renderer.render.return_value = output.getvalue()
         renderer._safety = None
-        task = {**self.task(), "outputCount": 4,
-                "prompts": [f"positive {index}" for index in range(1, 5)],
-                "negativePrompts": [f"negative {index}" for index in range(1, 5)]}
-
+        safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
+        task = {**self.task(), "outputCount": 4, "prompts": ["one", "two", "three", "four"],
+                "seeds": [11, 22, 33, 44]}
         worker._discord_task(Link(), task, renderer, "device")
-
-        jobs = [call.args[0] for call in renderer.render.call_args_list]
-        self.assertEqual([(job["prompt"], job["negativePrompt"]) for job in jobs], [
-            ("positive 1", "negative 1"), ("positive 2", "negative 2"),
-            ("positive 3", "negative 3"), ("positive 4", "negative 4"),
-        ])
+        self.assertEqual([call.args[0]["prompt"] for call in renderer.render.call_args_list], task["prompts"])
+        self.assertEqual([call.args[0]["seed"] for call in renderer.render.call_args_list], [11, 22, 33, 44])
+        renderer.unload.assert_called_once_with()
 
     @mock.patch("peerpixel.safety.SafetyClassifier")
     @mock.patch.object(api, "submit_discord_result")
-    def test_single_render_uses_scalar_prompt_pair(self, _submit, safety_type):
-        safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
+    def test_variations_and_upscale_use_noise_continuation_without_source_images(self, submit, safety_type):
         renderer = self.renderer()
+        output = io.BytesIO()
+        Image.new("RGB", (16, 16), "blue").save(output, "JPEG")
+        renderer.render.return_value = output.getvalue()
         renderer._safety = None
-        task = {**self.task(), "negativePrompt": "negative fox"}
+        safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": 0.01}
+        vary = {**self.task(), "operation": "vary", "outputCount": 4, "baseSeed": 7,
+                "prompts": ["one", "two", "three", "four"], "strength": .55,
+                "seeds": [11, 22, 33, 44]}
+        worker._discord_task(Link(), vary, renderer, "device")
+        self.assertEqual([call.args[0]["seed"] for call in renderer.render.call_args_list], [7] * 4)
+        self.assertEqual([call.args[0]["noiseBlendSeed"] for call in renderer.render.call_args_list], [11, 22, 33, 44])
 
-        worker._discord_task(Link(), task, renderer, "device")
-
+        renderer.reset_mock()
+        refine = {**self.task(), "operation": "refine", "width": 1024, "height": 1024,
+                  "steps": 50, "baseSeed": 7, "noiseBlendStrength": .12,
+                  "noiseBaseWidth": 512, "noiseBaseHeight": 512}
+        worker._discord_task(Link(), refine, renderer, "device")
         job = renderer.render.call_args.args[0]
-        self.assertEqual((job["prompt"], job["negativePrompt"]),
-                         ("a fox", "negative fox"))
-
-    def test_render_rejects_non_string_prompt_pair_entries(self):
-        renderer = self.renderer()
-        task = {**self.task(), "prompts": [123], "negativePrompts": ["negative fox"]}
-        with self.assertRaisesRegex(ValueError, "prompt_pair_count_mismatch"):
-            worker._discord_task(Link(), task, renderer, "device")
-        renderer.render.assert_not_called()
+        self.assertEqual((job["operation"], job["width"], job["height"], job["steps"]),
+                         ("refine", 1024, 1024, 50))
+        self.assertEqual((job["seed"], job["noiseBaseWidth"]), (7, 512))
+        self.assertNotEqual(job["noiseBlendSeed"], job["seed"])
+        self.assertNotIn("_editSource", job)
 
     def test_four_cells_are_composed_into_one_two_by_two_grid(self):
         cells = []

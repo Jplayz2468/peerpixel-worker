@@ -151,6 +151,39 @@ class ProtocolVersionTests(unittest.TestCase):
             "CPU 12% · RAM 4/8 GB · online, waiting for work · 2 images",
         )
 
+    def test_prompt_trainer_requires_explicit_nested_config_opt_in(self):
+        renderer = mock.Mock()
+        client = mock.Mock()
+        disabled = worker.build_trainer_capability(
+            {"deviceId": "owner", "promptTrainer": {}}, renderer, client=client)
+        enabled = worker.build_trainer_capability(
+            {"deviceId": "owner", "promptTrainer": {"enabled": True}},
+            renderer, client=client)
+        self.assertEqual(disabled.capabilities, ())
+        self.assertEqual(enabled.capabilities, ("train",))
+
+    def test_idle_tick_sends_only_a_websocket_heartbeat(self):
+        events = []
+        capability = mock.Mock()
+        capability.poll_when_idle.side_effect = lambda: events.append("poll") or True
+        link = mock.Mock()
+        link.send.side_effect = lambda payload: events.append(json.loads(payload)["type"])
+        worker.send_idle_heartbeat(link)
+        self.assertEqual(events, ["heartbeat"])
+        capability.poll_when_idle.assert_not_called()
+
+    def test_training_is_polled_only_when_the_coordinator_signals_work(self):
+        capability = mock.Mock()
+        capability.poll_when_idle.return_value = True
+        self.assertTrue(worker.handle_training_signal(
+            {"type": "ack", "trainingAvailable": True}, capability))
+        capability.poll_when_idle.assert_called_once_with()
+
+        capability.reset_mock()
+        self.assertFalse(worker.handle_training_signal(
+            {"type": "ack"}, capability))
+        capability.poll_when_idle.assert_not_called()
+
 
 class SocketResultTests(unittest.TestCase):
     def test_an_edit_fetches_private_source_and_mask_only_after_assignment(self):

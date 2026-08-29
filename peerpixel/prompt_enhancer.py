@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import re
+from pathlib import Path
+
+MAX_NEW_TOKENS = 192
 
 COMMON_NEGATIVE = (
     "blurry, low detail, malformed anatomy, distorted hands, extra limbs, "
@@ -25,10 +29,23 @@ STYLE_NEGATIVES = {
     "pixel_art": "antialiasing, smooth gradients, vector curves, 3D rendering, inconsistent pixel scale",
 }
 
-SYSTEM_INSTRUCTION = """You are an expert prompt optimizer for FLUX image models.
-Output ONLY one valid JSON object with exactly three string fields: "style", "prompt", and "negative_prompt". No markdown, preamble, or additional keys.
 
-The "prompt" is the complete wanted-content conditioning for this candidate. The "negative_prompt" is the complete unwanted-content conditioning for the same candidate: include relevant universal quality protections and scene-specific likely failures. Never negate anything the user requested. There is no application-selected sentence, character, item, or output-token limit; use only as much detail as improves control within the model context window.
+class PerRowTemperature:
+    """Apply independent sampling temperatures to one batched generation."""
+
+    def __init__(self, temperatures):
+        self.temperatures = [max(0.05, min(2.0, float(value))) for value in temperatures]
+
+    def __call__(self, _input_ids, scores):
+        import torch
+        if scores.shape[0] != len(self.temperatures):
+            raise ValueError("temperature_batch_mismatch")
+        scale = torch.tensor(self.temperatures, device=scores.device,
+                             dtype=scores.dtype).unsqueeze(1)
+        return scores / scale
+
+SYSTEM_INSTRUCTION = """You are an expert prompt optimizer for FLUX image models.
+Output ONLY one valid compact JSON object with exactly two string fields: "prompt" and "negative_prompt". No markdown, preamble, or additional keys. Write the prompt as 1–2 dense sentences of concrete image-model instructions. Write negative_prompt as a concise comma-separated list of concrete visual defects or unwanted elements specifically relevant to this image; never negate requested subjects or visible text.
 
 Behavior:
 - If the user's prompt is simple, short, or underspecified: invent a coherent, original visual concept rather than only decorating the given words. Describe literal, externally visible facts: the subject's complete appearance or design, clothing and accessories when applicable, exact action or pose, setting and background elements, spatial composition, lighting direction and quality, weather or time, colors, materials, and surface textures. Make bold but plausible visual choices that turn inputs such as "a man" into a fully specified scene. Do not merely restate the subject and append the style directive.
@@ -41,7 +58,10 @@ Behavior:
 - When visible text is explicitly requested on a sign, poster, cover, label, screen, garment, title, caption, or similar surface: reproduce its exact spelling and capitalization in double quotes. Describe the physical surface plus typography, placement, material, contrast, and legibility so FLUX treats the words as part of the composition. Never paraphrase, translate, extend, or invent copy. Spoken dialogue is not visible image text unless the user requests a speech bubble, subtitle, or caption.
 - Develop the scene concept before applying the one required style supplied with the request. Never borrow characteristics from a different style."""
 
-AUTO_SYSTEM_INSTRUCTION = SYSTEM_INSTRUCTION + """
+AUTO_SYSTEM_INSTRUCTION = SYSTEM_INSTRUCTION.replace(
+    'exactly one string field: "prompt"',
+    'exactly two string fields: "style" and "prompt"',
+) + """
 - Choose exactly one style from: photoreal, anime, vector, cinematic, watercolor, illustration, pixel_art. Put its lowercase name in "style". Choose the style that best serves the subject and concept; do not default mechanically to photoreal."""
 
 STYLES = ("photoreal", "anime", "vector", "cinematic", "watercolor",
@@ -130,13 +150,15 @@ def parse_enhancement(text: str, *, fallback_prompt: str,
     except (json.JSONDecodeError, TypeError):
         value = None
     if isinstance(value, dict):
-        prompt_value = value.get("prompt")
-        negative_value = value.get("negative_prompt")
-        prompt = prompt_value.strip().strip('"') if isinstance(prompt_value, str) else ""
-        negative = negative_value.strip().strip('"') if isinstance(negative_value, str) else ""
+        prompt = str(value.get("prompt") or "").strip().strip('"')
+        negative = str(value.get("negative_prompt") or "").strip().strip('"')
     else:
-        prompt = "" if cleaned.startswith("{") else cleaned.strip('"')
-        negative = ""
+        prompt, negative = cleaned.strip('"'), ""
+        wrapper = re.match(r'^\s*\{\s*"prompt"\s*:\s*"', prompt)
+        if wrapper:
+            prompt = prompt[wrapper.end():]
+            prompt = re.sub(r'"\s*\}\s*$', "", prompt)
+            prompt = prompt.replace(r'\"', '"').replace(r'\n', ' ')
     if prompt.startswith("{"):
         try:
             nested = json.loads(prompt)
@@ -157,14 +179,15 @@ def parse_enhancement(text: str, *, fallback_prompt: str,
         prompt = prompt.rstrip().rstrip(".!?") + (
             f', featuring exact visible text {exact} with clear, correctly spelled typography.'
         )
+    # Model instructions are not a dependable output boundary. Keep the first
+    # two complete sentences so an over-creative response cannot bloat every
+    # diffusion request; preserve a trailing fragment when there are fewer.
+    ends = list(re.finditer(r"[.!?](?=\s|$)", prompt))
+    if len(ends) >= 2:
+        prompt = prompt[:ends[1].end()].strip()
     if visible_text:
         parts = [part.strip() for part in negative.split(",") if part.strip()]
-        broad_text_exclusion = re.compile(
-            r"^(?:no|unwanted|avoid)\s+(?:text|letters|typography)$", re.IGNORECASE,
-        )
-        parts = [part for part in parts if part.lower() not in {
-            "unintended text", "text", "letters", "typography",
-        } and not broad_text_exclusion.match(part)]
+        parts = [part for part in parts if part.lower() not in {"unintended text", "letters"}]
         for rule in REQUESTED_TEXT_NEGATIVE.split(", "):
             if rule not in parts:
                 parts.append(rule)
@@ -217,62 +240,155 @@ def enhancement_messages(prompt: str, style: str) -> list[dict[str, str]]:
         {"role": "user", "content": (
             f"{chosen}\nUser prompt: {prompt.strip()}\n" +
             text_instruction +
-            "Write a complete negative_prompt for this exact candidate. Use these baseline quality "
-            f"protections where relevant and add scene-specific failure modes: {template}\n"
+            "Output an aligned negative_prompt for this exact image concept.\n"
+            f"Never introduce anything contradicted by these exclusions: {template}\n"
             "FINAL AND HIGHEST-PRIORITY REQUIREMENT:\n" + style_instruction
         )},
     ]
 
 
+def bootstrap_messages(prompt: str) -> list[dict[str, str]]:
+    """The disposable SFT contract: one raw prompt in, one plain prompt out."""
+    return [{"role": "user", "content": str(prompt or "").strip()}]
+
+
 class PromptEnhancer:
-    def __init__(self, model_path=None):
+    def __init__(self, model_path=None, adapter_path=None):
         self.model_path = model_path
+        configured = adapter_path if adapter_path is not None else os.environ.get(
+            "PEERPIXEL_PROMPT_ADAPTER")
+        self.adapter_path = Path(configured).expanduser() if configured else None
+        self._adapter_manifest = None
         self.tokenizer = None
         self.model = None
+
+    @property
+    def provenance(self) -> str:
+        return str((self._adapter_manifest or {}).get("version") or "qwen3-1.7b")
 
     def warm(self):
         if self.model is not None:
             return
+        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         from . import model_hub
 
+        if self.adapter_path:
+            from .lora_manifest import load_manifest
+            manifest = load_manifest(self.adapter_path / "manifest.json")
+            evaluation = manifest.get("evaluation", {})
+            if (manifest.get("kind") not in {"bootstrap", "preference"}
+                    or evaluation.get("passed") is not True):
+                raise ValueError("prompt adapter has not passed evaluation")
+            self._adapter_manifest = manifest
         path = self.model_path or model_hub.ensure("qwen3-1.7b")
         self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
-        # Keep the small language model on CPU. On Apple silicon, "auto" puts
-        # it in unified GPU memory beside FLUX; the resulting pressure makes
-        # the last diffusion step and VAE decode swap for minutes.
-        self.model = AutoModelForCausalLM.from_pretrained(
-            path, local_files_only=True, device_map="cpu")
+        # CUDA workers release FLUX before enhancement, so the small language
+        # model can use the GPU without competing for VRAM. Non-CUDA workers
+        # retain the portable CPU path (especially important on unified-memory
+        # Apple systems, where sharing with FLUX can make decode swap).
+        device_map = "cuda" if torch.cuda.is_available() else "cpu"
+        base = AutoModelForCausalLM.from_pretrained(
+            path, local_files_only=True, device_map=device_map)
+        if self.adapter_path:
+            from peft import PeftModel
+            self.model = PeftModel.from_pretrained(base, self.adapter_path)
+        else:
+            self.model = base
 
-    def _generate_text(self, messages, *, seed: int, temperature: float,
-                       top_p: float, repetition_penalty: float) -> str:
+    def _generate_text(self, messages, *, max_new_tokens: int, seed: int) -> str:
         import torch
 
         text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
         )
         inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
-        context = int(getattr(self.model.config, "max_position_embeddings", 0) or 0)
-        used = int(inputs.input_ids.shape[-1])
-        if context <= used:
-            raise RuntimeError("prompt_model_context_exhausted")
-        options = {"max_new_tokens": context - used}
-        if temperature > 0:
-            options.update(
-                do_sample=True, temperature=temperature, top_p=top_p,
-                repetition_penalty=repetition_penalty,
-            )
-        else:
-            options["do_sample"] = False
         with torch.random.fork_rng():
             torch.manual_seed(seed)
-            output = self.model.generate(**inputs, **options)
+            output = self.model.generate(
+                **inputs, max_new_tokens=max_new_tokens, do_sample=False,
+            )
         generated = output[0][inputs.input_ids.shape[-1]:]
         return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
+    def enhance_pairs_batch(self, prompt: str, *, count: int = 4,
+                            sampling: dict | None = None,
+                            mode: str = "broad",
+                            on_progress=None) -> list[dict[str, str]]:
+        """Explore several prompt directions in one model pass.
+
+        Sampling policy comes from the coordinator, so changing exploration
+        strength never requires updating a worker.
+        """
+        import torch
+
+        count = max(1, min(4, int(count)))
+        policy = sampling or {}
+        supplied = policy.get("temperatures", [policy.get("temperature", 0.9)] * count)
+        if not isinstance(supplied, (list, tuple)) or len(supplied) != count:
+            raise ValueError("temperature_batch_mismatch")
+        temperatures = [max(0.05, min(2.0, float(value))) for value in supplied]
+        top_p = max(0.1, min(1.0, float(policy.get("topP", 0.95))))
+        repetition_penalty = max(1.0, min(1.3, float(policy.get("repetitionPenalty", 1.0))))
+        max_tokens = max(32, min(MAX_NEW_TOKENS, int(policy.get("maxNewTokens",
+                                                                policy.get("maxTokens", MAX_NEW_TOKENS)))))
+        self.warm()
+        # The Discord product has one learned contract: raw prompt in, enhanced
+        # prompt out. There is no style classifier or style instruction layer.
+        messages = bootstrap_messages(prompt)
+        text = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+        )
+        inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
+        width = inputs.input_ids.shape[-1]
+        visible_text = requested_visible_text(prompt)
+        pairs = []
+        try:
+            base_seed = int(policy["seed"]) & 0x7fffffff
+        except (KeyError, TypeError, ValueError):
+            base_seed = sampling_seed(prompt, mode)
+        for index, temperature in enumerate(temperatures):
+            with torch.random.fork_rng():
+                torch.manual_seed(base_seed + index * 104729)
+                output = self.model.generate(
+                    **inputs, max_new_tokens=max_tokens, do_sample=True,
+                    temperature=temperature, top_p=top_p,
+                    repetition_penalty=repetition_penalty,
+                )[0]
+            generated = self.tokenizer.decode(output[width:], skip_special_tokens=True).strip()
+            invalid = (not generated or generated.startswith(("[", "```"))
+                       or generated.lower().startswith(("here is", "enhanced prompt", "prompt:")))
+            if invalid:
+                generated = prompt.strip()
+            pairs.append(parse_enhancement(
+                generated, fallback_prompt=prompt, fallback_negative=COMMON_NEGATIVE,
+                visible_text=visible_text))
+            if on_progress is not None:
+                on_progress(index + 1)
+        return pairs
+
+    def enhance_batch(self, prompt: str, *, count: int = 4,
+                      sampling: dict | None = None, mode: str = "broad") -> list[str]:
+        return [pair["prompt"] for pair in self.enhance_pairs_batch(
+            prompt, count=count, sampling=sampling, mode=mode)]
+
     def enhance_pair(self, prompt: str, style: str, *, enabled=True, resolved=None,
-                     resolved_negative=None, temperature=0.7, top_p=0.9,
-                     repetition_penalty=1.05, seed=None) -> dict[str, str]:
+                     resolved_negative=None) -> dict[str, str]:
+        if self.adapter_path and enabled and not resolved:
+            self.warm()
+            visible_text = requested_visible_text(prompt)
+            generated = self._generate_text(
+                bootstrap_messages(prompt), max_new_tokens=MAX_NEW_TOKENS,
+                seed=sampling_seed(prompt, "bootstrap"),
+            ).strip()
+            invalid = (not generated or generated.startswith(("{", "[", "```"))
+                       or generated.lower().startswith(("here is", "enhanced prompt", "prompt:")))
+            if invalid:
+                generated = prompt.strip()
+            return parse_enhancement(
+                generated, fallback_prompt=prompt, fallback_negative=COMMON_NEGATIVE,
+                visible_text=visible_text,
+            )
         if resolved and style != "auto":
             return {"prompt": str(resolved).strip(),
                     "negativePrompt": str(resolved_negative or "").strip()}
@@ -289,9 +405,8 @@ class PromptEnhancer:
         visible_text = requested_visible_text(prompt)
         messages = enhancement_messages(prompt, style)
         generated_text = self._generate_text(
-            messages, seed=(sampling_seed(prompt, style) if seed is None else int(seed)),
-            temperature=float(temperature), top_p=float(top_p),
-            repetition_penalty=float(repetition_penalty),
+            messages, max_new_tokens=MAX_NEW_TOKENS,
+            seed=sampling_seed(prompt, style),
         )
         if not generated_text:
             raise RuntimeError("prompt_enhancement_empty")
@@ -304,8 +419,7 @@ class PromptEnhancer:
         )
         chosen_style = parsed.get("style", style)
         parsed["prompt"] = with_style_suffix(parsed["prompt"], chosen_style)
-        if not parsed["negativePrompt"]:
-            parsed["negativePrompt"] = negative_template(chosen_style, visible_text)
+        parsed["negativePrompt"] = negative_template(chosen_style, visible_text)
         if not enabled:
             parsed["prompt"] = prompt.strip()
         elif resolved:
@@ -313,27 +427,6 @@ class PromptEnhancer:
             if resolved_negative is not None:
                 parsed["negativePrompt"] = str(resolved_negative).strip()
         return parsed
-
-    def enhance_pairs(self, prompt: str, style: str, *, count: int,
-                      sampling: dict | None = None) -> list[dict[str, str]]:
-        if count < 1:
-            raise ValueError("prompt_pair_count_invalid")
-        options = sampling or {}
-        temperatures = options.get("temperatures") or []
-        top_p = float(options.get("topP", 0.9))
-        repetition_penalty = float(options.get("repetitionPenalty", 1.05))
-        pairs = []
-        for index in range(count):
-            temperature = float(temperatures[index] if index < len(temperatures) else 0.7)
-            pair = self.enhance_pair(
-                prompt, style, temperature=temperature, top_p=top_p,
-                repetition_penalty=repetition_penalty,
-                seed=sampling_seed(f"{prompt}\0{index}", style),
-            )
-            if not pair.get("prompt") or not pair.get("negativePrompt"):
-                raise RuntimeError("prompt_enhancement_empty")
-            pairs.append(pair)
-        return pairs
 
     def enhance(self, prompt: str, style: str, *, enabled=True, resolved=None) -> str:
         """Compatibility API for callers that only need the positive prompt."""

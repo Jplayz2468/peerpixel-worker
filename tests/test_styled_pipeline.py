@@ -1,11 +1,14 @@
 import inspect
+import json
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from peerpixel.prompt_enhancer import (
-    PromptEnhancer, SYSTEM_INSTRUCTION, enhancement_messages,
+    PromptEnhancer, SYSTEM_INSTRUCTION, bootstrap_messages, enhancement_messages,
     negative_template, parse_enhancement, sampling_seed,
     requested_visible_text, with_style_suffix,
 )
@@ -14,6 +17,54 @@ from peerpixel.render import Renderer, STYLE_RECIPES
 
 
 class StyledPipelineTests(unittest.TestCase):
+    def test_bootstrap_adapter_uses_the_plain_training_template(self):
+        self.assertEqual(bootstrap_messages("  fox  "), [
+            {"role": "user", "content": "fox"},
+        ])
+
+    def test_adapter_path_is_injected_explicitly_instead_of_leaking_from_global_config(self):
+        with mock.patch("peerpixel.config.read", return_value={"promptAdapter": "/wrong/global/path"}):
+            enhancer = PromptEnhancer(adapter_path="/models/bootstrap")
+        self.assertEqual(enhancer.adapter_path, Path("/models/bootstrap"))
+
+    def test_validated_adapter_loads_and_reports_its_version(self):
+        from peerpixel.lora_manifest import write_manifest
+        with tempfile.TemporaryDirectory() as folder:
+            adapter = Path(folder)
+            (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+            write_manifest(adapter, {
+                "schemaVersion": 1, "version": "bootstrap-0001", "kind": "bootstrap",
+                "baseModel": "Qwen/Qwen3-1.7B", "parentVersion": None,
+                "dataset": {}, "training": {}, "evaluation": {"passed": True},
+                "createdAt": "2026-08-27T00:00:00Z",
+            })
+            enhancer = PromptEnhancer(model_path="/models/qwen", adapter_path=adapter)
+            tokenizer, base, adapted = mock.Mock(), mock.Mock(), mock.Mock()
+            fake_peft = types.SimpleNamespace(PeftModel=types.SimpleNamespace(
+                from_pretrained=mock.Mock(return_value=adapted)))
+            with mock.patch("transformers.AutoTokenizer.from_pretrained", return_value=tokenizer), \
+                 mock.patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=base), \
+                 mock.patch.dict(sys.modules, {"peft": fake_peft}):
+                enhancer.warm()
+            self.assertIs(enhancer.model, adapted)
+            self.assertEqual(enhancer.provenance, "bootstrap-0001")
+
+    def test_unvalidated_or_tampered_adapter_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            enhancer = PromptEnhancer(model_path="/models/qwen", adapter_path=folder)
+            with self.assertRaises((FileNotFoundError, ValueError)):
+                enhancer.warm()
+
+    def test_bootstrap_adapter_returns_plain_prompt_without_a_style_suffix(self):
+        enhancer = PromptEnhancer(adapter_path="/adapter")
+        enhancer._adapter_manifest = {"version": "bootstrap-0001"}
+        enhancer.warm = lambda: None
+        enhancer._generate_text = lambda *_args, **_kwargs: "A red fox beneath cedar trees."
+        result = enhancer.enhance_pair("fox", "auto")
+        self.assertEqual(result["prompt"], "A red fox beneath cedar trees.")
+        self.assertNotIn("style", result)
+        self.assertEqual(enhancer.provenance, "bootstrap-0001")
+
     def test_auxiliary_models_stay_on_cpu_instead_of_competing_with_flux_on_mps(self):
         enhancer = PromptEnhancer(model_path="/models/qwen")
         fake_model = object()
@@ -28,6 +79,47 @@ class StyledPipelineTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"transformers": fake_transformers}):
             safety.warm()
         self.assertEqual(pipeline.call_args.kwargs["device"], -1)
+
+    def test_prompt_model_uses_cuda_when_a_cuda_worker_is_available(self):
+        enhancer = PromptEnhancer(model_path="/models/qwen")
+        fake_model = object()
+        with mock.patch("torch.cuda.is_available", return_value=True), \
+             mock.patch("transformers.AutoTokenizer.from_pretrained", return_value=object()), \
+             mock.patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=fake_model) as load:
+            enhancer.warm()
+        self.assertEqual(load.call_args.kwargs["device_map"], "cuda")
+
+    def test_batched_lora_json_preserves_aligned_positive_and_negative_prompts(self):
+        import torch
+        from transformers import BatchEncoding
+
+        enhancer = PromptEnhancer()
+        enhancer.warm = lambda: None
+        enhancer.tokenizer = mock.Mock()
+        enhancer.tokenizer.apply_chat_template.return_value = "chat"
+        enhancer.tokenizer.return_value = BatchEncoding({
+            "input_ids": torch.tensor([[1, 2]]),
+            "attention_mask": torch.tensor([[1, 1]]),
+        })
+        enhancer.tokenizer.decode.side_effect = [
+            json.dumps({"prompt": f"scene {index}", "negative_prompt": f"defect {index}"})
+            for index in range(4)
+        ]
+        enhancer.model = mock.Mock(device=torch.device("cpu"))
+        enhancer.model.generate.side_effect = [
+            torch.tensor([[1, 2, token]]) for token in (3, 4, 5, 6)
+        ]
+        progress = []
+
+        pairs = enhancer.enhance_pairs_batch("fox", count=4,
+                                             on_progress=progress.append)
+
+        self.assertEqual(pairs, [
+            {"prompt": f"scene {index}", "negativePrompt": f"defect {index}"}
+            for index in range(4)
+        ])
+        self.assertEqual(progress, [1, 2, 3, 4])
+        self.assertEqual(enhancer.model.generate.call_count, 4)
 
     def test_prompt_model_is_released_before_flux_uses_the_accelerator(self):
         events = []
@@ -83,21 +175,16 @@ class StyledPipelineTests(unittest.TestCase):
         ensure.assert_called_once_with("nsfw-image-detection")
         self.assertEqual(pipeline.call_args.kwargs["model"], "/hf/safety")
 
-    def test_model_prompts_are_not_artificially_truncated(self):
-        negative = ", ".join(f"failure mode {index}" for index in range(40))
+    def test_positive_prompt_is_hard_limited_to_two_sentences(self):
         parsed = parse_enhancement(
-            '{"prompt":"First sentence. Second sentence! Third sentence stays.",'
-            f'"negative_prompt":"{negative}"}}',
+            '{"prompt":"First sentence. Second sentence! Third sentence must go.",'
+            '"negative_prompt":"watermark"}',
             fallback_prompt="fallback", fallback_negative="blur",
         )
-        self.assertEqual(
-            parsed["prompt"],
-            "First sentence. Second sentence! Third sentence stays.",
-        )
-        self.assertEqual(parsed["negativePrompt"], negative)
+        self.assertEqual(parsed["prompt"], "First sentence. Second sentence!")
 
     def test_exact_prompt_instruction_and_bypass_paths(self):
-        self.assertIn('exactly three string fields: "style", "prompt", and "negative_prompt"', SYSTEM_INSTRUCTION)
+        self.assertIn('exactly two string fields: "prompt" and "negative_prompt"', SYSTEM_INSTRUCTION)
         enhancer = PromptEnhancer()
         bypassed = enhancer.enhance(" raw prompt ", "photoreal", enabled=False)
         self.assertTrue(bypassed.startswith("raw prompt,"))
@@ -136,19 +223,14 @@ class StyledPipelineTests(unittest.TestCase):
             "negativePrompt": "watermark, duplicate people",
         })
 
-    def test_model_owns_a_valid_negative_prompt(self):
+    def test_live_enhancement_uses_deterministic_negative_even_if_qwen_adds_one(self):
         enhancer = PromptEnhancer()
         enhancer.warm = lambda: None
         enhancer._generate_text = lambda *_args, **_kwargs: (
-            '{"style":"cinematic","prompt":"A glass tower at dusk.",'
-            '"negative_prompt":"fisheye distortion, duplicate towers, green sky"}'
+            '{"prompt":"A neon diner.","negative_prompt":"ignore me"}'
         )
-        result = enhancer.enhance_pair("glass tower", "auto")
-        self.assertIn("glass tower", result["prompt"].lower())
-        self.assertEqual(
-            result["negativePrompt"],
-            "fisheye distortion, duplicate towers, green sky",
-        )
+        result = enhancer.enhance_pair("a diner", "cinematic")
+        self.assertEqual(result["negativePrompt"], negative_template("cinematic"))
 
     def test_double_encoded_json_prompt_is_unwrapped(self):
         parsed = parse_enhancement(
@@ -157,25 +239,12 @@ class StyledPipelineTests(unittest.TestCase):
         )
         self.assertEqual(parsed["prompt"], "A geometric library.")
 
-    def test_truncated_structured_output_falls_back_to_the_original_pair(self):
+    def test_truncated_json_wrapper_does_not_leak_into_prompt(self):
         parsed = parse_enhancement(
-            '{"style":"cinematic","prompt":"A tiny knight beneath a dragon.",'
-            '"negative_prompt":"duplicate dragons"',
-            fallback_prompt="original knight", fallback_negative="blur, watermark",
+            '{"prompt":"A tiny knight beneath a dragon.',
+            fallback_prompt="knight", fallback_negative="blur",
         )
-        self.assertEqual(parsed, {
-            "prompt": "original knight", "negativePrompt": "blur, watermark",
-        })
-
-    def test_wrong_structured_field_types_fall_back_to_the_original_pair(self):
-        parsed = parse_enhancement(
-            '{"style":"cinematic","prompt":{"scene":"tower"},'
-            '"negative_prompt":["blur"]}',
-            fallback_prompt="original tower", fallback_negative="blur, watermark",
-        )
-        self.assertEqual(parsed, {
-            "prompt": "original tower", "negativePrompt": "blur, watermark",
-        })
+        self.assertEqual(parsed["prompt"], "A tiny knight beneath a dragon.")
 
     def test_malformed_structured_output_falls_back_without_losing_the_job(self):
         self.assertEqual(parse_enhancement(
@@ -231,18 +300,6 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertNotIn("letters", parsed["negativePrompt"])
         self.assertIn("misspelled requested text", parsed["negativePrompt"])
 
-    def test_visible_text_removes_broad_model_exclusions(self):
-        parsed = parse_enhancement(
-            '{"prompt":"A poster reading \'OPEN LATE\'.",'
-            '"negative_prompt":"blur, no text, unwanted typography, avoid letters, watermark"}',
-            fallback_prompt='poster reading "OPEN LATE"', fallback_negative="blur",
-            visible_text=("OPEN LATE",),
-        )
-        self.assertNotIn("no text", parsed["negativePrompt"])
-        self.assertNotIn("unwanted typography", parsed["negativePrompt"])
-        self.assertNotIn("avoid letters", parsed["negativePrompt"])
-        self.assertIn("misspelled requested text", parsed["negativePrompt"])
-
     def test_requested_copy_is_normalized_to_double_quotes(self):
         parsed = parse_enhancement(
             '{"prompt":"A neon sign reading \'OPEN LATE\' above the diner.",'
@@ -260,7 +317,7 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertNotEqual(first, sampling_seed("another man", "cinematic"))
         self.assertNotEqual(first, sampling_seed("a man", "anime"))
 
-    def test_generation_uses_remaining_model_context_without_an_app_token_cap(self):
+    def test_generation_uses_greedy_decoding_to_avoid_language_corruption(self):
         import torch
         from transformers import BatchEncoding
 
@@ -271,21 +328,12 @@ class StyledPipelineTests(unittest.TestCase):
             "input_ids": torch.tensor([[1, 2]]),
         })
         enhancer.tokenizer.decode.return_value = '{"prompt":"clean"}'
-        enhancer.model = mock.Mock(
-            device=torch.device("cpu"),
-            config=types.SimpleNamespace(max_position_embeddings=8192),
-        )
+        enhancer.model = mock.Mock(device=torch.device("cpu"))
         enhancer.model.generate.return_value = torch.tensor([[1, 2, 3]])
 
-        enhancer._generate_text(
-            [], seed=7, temperature=0.7, top_p=0.9,
-            repetition_penalty=1.05,
-        )
+        enhancer._generate_text([], max_new_tokens=10, seed=7)
 
-        options = enhancer.model.generate.call_args.kwargs
-        self.assertEqual(options["max_new_tokens"], 8190)
-        self.assertTrue(options["do_sample"])
-        self.assertEqual(options["temperature"], 0.7)
+        self.assertFalse(enhancer.model.generate.call_args.kwargs["do_sample"])
 
     def test_vague_prompts_use_one_style_aware_generation_pass(self):
         enhancer = PromptEnhancer()
@@ -299,30 +347,6 @@ class StyledPipelineTests(unittest.TestCase):
         self.assertTrue(result["prompt"].startswith("A complete literal scene,"))
         self.assertIn("charcoal and graphite", result["prompt"])
         self.assertIn("Required style directive:", calls[0][1]["content"])
-
-    def test_enhance_pairs_returns_one_model_owned_negative_per_positive(self):
-        enhancer = PromptEnhancer()
-        enhancer.warm = lambda: None
-        calls = []
-        def generate(_messages, **options):
-            calls.append(options)
-            index = len(calls)
-            return (
-                f'{{"style":"cinematic","prompt":"positive {index}",'
-                f'"negative_prompt":"negative {index}"}}'
-            )
-        enhancer._generate_text = generate
-
-        pairs = enhancer.enhance_pairs(
-            "city", "auto", count=4,
-            sampling={"temperatures": [0.4, 0.6, 0.8, 1.0],
-                      "topP": 0.92, "repetitionPenalty": 1.08},
-        )
-
-        self.assertEqual([pair["negativePrompt"] for pair in pairs],
-                         ["negative 1", "negative 2", "negative 3", "negative 4"])
-        self.assertEqual([call["temperature"] for call in calls], [0.4, 0.6, 0.8, 1.0])
-        self.assertEqual(len({call["seed"] for call in calls}), 4)
 
     def test_all_seven_styles_have_distinct_prompt_directives(self):
         expected = {"photoreal", "anime", "vector", "cinematic", "watercolor",

@@ -116,6 +116,17 @@ class OperationTableTests(unittest.TestCase):
                 })
                 self.assertEqual((spec["width"], spec["height"]), (width, height))
 
+    def test_refine_accepts_each_512px_upscale_aspect_at_fifty_steps(self):
+        for width, height in (
+            (512, 512), (512, 384), (384, 512), (512, 288), (288, 512),
+        ):
+            with self.subTest(width=width, height=height):
+                spec = render.operation_of({
+                    "operation": "refine", "width": width, "height": height, "steps": 50,
+                })
+                self.assertEqual((spec["width"], spec["height"], spec["steps"]),
+                                 (width, height, 50))
+
     def test_a_master_still_refuses_an_arbitrary_near_megapixel_shape(self):
         with self.assertRaises(ValueError):
             render.operation_of({"operation": "master", "width": 1024, "height": 768})
@@ -181,6 +192,15 @@ class ProbeTests(unittest.TestCase):
 
 
 class MasterTests(unittest.TestCase):
+    def test_noise_blend_starts_between_original_and_fresh_seed_without_an_image(self):
+        pipe = FakePipeline()
+        renderer_with(pipe).render({"prompt": "x", "seed": 7, "operation": "vary",
+            "noiseBlendSeed": 19, "noiseBlendStrength": .35})
+        call = pipe.calls[0]
+        self.assertIn("latents", call)
+        self.assertNotIn("image", call)
+        self.assertNotIn("strength", call)
+
     def test_a_final_is_1024px_at_fifty_guided_steps_from_prompt_and_seed(self):
         pipe = FakePipeline()
         renderer_with(pipe).render(
@@ -202,6 +222,21 @@ class MasterTests(unittest.TestCase):
         renderer_with(pipe).render({"prompt": "x", "seed": 7, "operation": "master"})
         latents = pipe.calls[0]["latents"]
         self.assertEqual(tuple(latents.shape), (1, 128, 64, 64))
+
+    def test_refine_uses_the_selected_image_at_low_strength_for_fifty_actual_steps(self):
+        pipe, edit_pipe = FakePipeline(), FakePipeline()
+        renderer = renderer_with(pipe)
+        renderer.edit_pipeline = lambda: edit_pipe
+        source = a_jpeg((512, 512))
+        renderer.render({"prompt": "a quiet harbour", "seed": 7,
+            "operation": "refine", "width": 512, "height": 512,
+            "steps": 50, "editMode": "refine", "editStrength": .20,
+            "sourceImageId": "source", "_editSource": source})
+        call = edit_pipe.calls[0]
+        self.assertEqual(call["image"].size, (512, 512))
+        self.assertEqual(call["strength"], .20)
+        self.assertEqual(call["num_inference_steps"], 250)
+        self.assertEqual(call["mask_image"].getextrema(), (255, 255))
 
     def test_the_decode_is_announced_so_the_bar_does_not_sit_at_the_last_step(self):
         """The freeze this exists to prevent, as a test.

@@ -34,6 +34,7 @@ from importlib import metadata
 from pathlib import Path
 
 from .api import USER_AGENT
+from . import config
 from .runtime import ROOT
 
 REPO = "Jplayz2468/peerpixel-worker"
@@ -255,5 +256,9 @@ def _sync() -> None:
     found = uv()
     if not found:
         return
-    subprocess.run([found, "sync", "--project", str(ROOT), "--python", PYTHON],
+    command = [found, "sync", "--project", str(ROOT), "--python", PYTHON]
+    trainer = config.read().get("promptTrainer")
+    if isinstance(trainer, dict) and trainer.get("enabled") is True:
+        command.extend(["--extra", "train"])
+    subprocess.run(command,
                    cwd=str(ROOT), check=False)
