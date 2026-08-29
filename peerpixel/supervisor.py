@@ -159,7 +159,10 @@ def supervise(*, once: bool = False, policy: RuntimePolicy | None = None,
                     state, now=now, physical_memory=int(psutil.virtual_memory().total))
                 if reason:
                     break
-            process.join(timeout=0)
+            # Reap the just-exited child before inspecting its code. A zero-time
+            # join can leave exitcode as None briefly and misclassify an update
+            # request as an ordinary crash.
+            process.join(timeout=1)
         except (EOFError, OSError):
             pass
         except KeyboardInterrupt:
