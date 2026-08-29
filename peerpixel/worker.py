@@ -27,7 +27,7 @@ from .version import RUNTIME_VERSION
 #: server's `public/generation-policy.mjs`.
 #:
 #: Protocol 12 is direct-only: public work is a native 1024px master, internal
-#: fraud work is an explicit 128px probe, and only probes and upscales return
+#: fraud work is an explicit 128px probe, and only probes return
 #: bytes over the socket. It adds explicit worker consent for private jobs and
 #: hides job content in the official worker interface. Older installs stay
 #: connected but ineligible until they update.
@@ -63,7 +63,7 @@ def asked_to_stop() -> bool:
 
 
 def await_settlement(link, job_id: str, *, timeout: float = 30.0, clock=time.monotonic):
-    """What the dispatcher paid for a socket-delivered probe or upscale.
+    """What the dispatcher paid for a socket-delivered probe.
 
     By the time this answer arrives the ledger has already moved; this only
     reads back how much for the local earnings line. A missing answer is worth
@@ -332,7 +332,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
     bar = plans.tracker("job", {"job.render": seconds_per_step(operation) * steps})
     started = time.monotonic()
     earned = 0.0
-    from .job_phases import EXPORT_PHASES, PHASES, PhaseReporter
+    from .job_phases import PHASES, PhaseReporter
 
     reporter = PhaseReporter(
         job["id"], lambda event: link.send(json.dumps({
@@ -342,7 +342,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
         })),
         scope=f"{operation}:{job.get('width', 0)}:{getattr(renderer, '_precision_mode', 'native')}:{getattr(renderer, '_memory_mode', 'unknown')}",
         persist=True,
-        phases=EXPORT_PHASES if operation == "upscale" else PHASES,
+        phases=PHASES,
     )
     reporter.begin("preparing")
 
@@ -396,39 +396,9 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                     if getattr(renderer, "_safety", None) is None:
                         renderer._safety = SafetyClassifier()
                     observed_digest = _digest(renderer._safety.classify(api.auxiliary_input(job["id"])))
-                elif auxiliary == "upscale":
-                    from .upscale import Upscaler
-                    renderer.unload()
-                    if not hasattr(renderer, "_upscaler") or renderer._upscaler is None:
-                        renderer._upscaler = Upscaler()
-                    observed_digest = hashlib.sha256(
-                        renderer._upscaler.upscale(api.auxiliary_input(job["id"]))
-                    ).hexdigest()
                 else:
                     raise RuntimeError("unknown_auxiliary_operation")
                 jpeg, evidence = b"", {}
-            elif operation == "upscale":
-                from .upscale import Upscaler
-                reporter.begin("loading_upscaler")
-                renderer.unload()
-                if not hasattr(renderer, "_upscaler") or renderer._upscaler is None:
-                    renderer._upscaler = Upscaler()
-                source = api.upscale_source(job["id"])
-                def upscale_progress(done, total):
-                    try:
-                        link.send(json.dumps({
-                            "type": "upscale_progress", "jobId": job["id"],
-                            "done": done, "total": total,
-                        }))
-                    except Exception:
-                        pass
-                jpeg = renderer._upscaler.upscale(
-                    source, on_phase=reporter.begin, on_progress=upscale_progress)
-                evidence = {"manifestVersion": job.get("manifestVersion", "2026-08-23.1"),
-                            "attestations": [{"operation": "upscale",
-                                "inputDigest": hashlib.sha256(source).hexdigest(),
-                                "outputDigest": hashlib.sha256(jpeg).hexdigest(),
-                                "runtimeVersion": RUNTIME_VERSION}]}
             elif hasattr(renderer, "generate_job"):
                 render_job = job
                 if job.get("editMode"):
@@ -456,11 +426,6 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                 measurements["image"] = base64.b64encode(jpeg).decode()
                 api.submit_verification(job["id"], measurements)
                 notify_finished(link, job["id"])
-            elif operation == "upscale":
-                link.send(relay.encode({
-                    "type": "upscale_result", "jobId": job["id"], **evidence,
-                }, jpeg))
-                earned = await_settlement(link, job["id"])
             elif operation == "probe":
                 if len(jpeg) > relay.MAX_RESULT_BYTES:
                     raise RuntimeError(f"the probe is {len(jpeg)} bytes, over the "

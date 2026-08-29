@@ -45,10 +45,10 @@ def generation_warning(bench_ms: int, accelerator: str) -> str:
     if "Apple silicon" in accelerator or "MLX" in accelerator:
         return (f"A 1024px render is estimated at about {estimate / 1000:.0f}s. "
                 "Macs are slower than current NVIDIA workers and may receive very few image jobs; "
-                "this Mac remains useful for probes, verification and upscaling.")
+                "this Mac remains useful for probes and verification.")
     return (f"A full high-resolution render is estimated at about {estimate / 1000:.0f}s. "
             "Faster machines are preferred, so this machine may earn few generation credits; "
-            "it remains useful for probes, verification and upscaling.")
+            "it remains useful for probes and verification.")
 
 
 def qualify_candidate(baseline_ms: int, candidate_ms: int, *, valid,

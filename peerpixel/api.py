@@ -132,19 +132,6 @@ def submit_verification(check_id: str, measurements: dict) -> dict:
                  payload=measurements, timeout=120)
 
 
-def upscale_source(job_id: str) -> bytes:
-    token = config.read().get("token", "")
-    request = urllib.request.Request(
-        f"{config.API}/api/device/upscale/{job_id}/source",
-        headers={"user-agent": USER_AGENT, "authorization": f"Bearer {token}"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            return response.read()
-    except urllib.error.HTTPError as error:
-        raise ApiError(error.code, "upscale_source_failed") from None
-
-
 def edit_asset(job_id: str, which: str) -> bytes:
     if which not in ("source", "mask"):
         raise ValueError("unknown_edit_asset")

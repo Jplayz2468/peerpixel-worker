@@ -50,7 +50,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertFalse(likely_generation_work(8_000))
         warning = generation_warning(8_000, "Apple silicon MLX q4")
         self.assertIn("few image jobs", warning)
-        self.assertIn("verification and upscaling", warning)
+        self.assertIn("probes and verification", warning)
+        self.assertNotIn("upscal", warning.lower())
 
     def test_only_second_render_is_timed_and_submitted(self):
         renderer = FakeRenderer()

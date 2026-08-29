@@ -11,12 +11,6 @@ PHASES = (
     "loading_style", "rendering", "decoding", "safety_check",
     "delivering", "complete",
 )
-EXPORT_PHASES = (
-    "preparing", "loading_upscaler", "upscaling", "encoding_export",
-    "delivering", "complete",
-)
-
-
 def valid_phase_sequence(phases, *, allowed=PHASES) -> bool:
     index = {name: position for position, name in enumerate(allowed)}
     try:
