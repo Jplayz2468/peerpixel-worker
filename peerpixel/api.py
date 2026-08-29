@@ -94,8 +94,6 @@ def submit_discord_result(job: dict, device_id: str, images: list[tuple[bytes, d
     payload = {"jobId": job["id"], "deviceId": device_id,
                "assignmentToken": job["assignmentToken"],
                "images": [_upload_image(image, evidence) for image, evidence in images]}
-    if job.get("operation") == "upscale":
-        payload.update(model="aurasr-v2", width=int(job["width"]), height=int(job["height"]))
     if grid is not None:
         payload["grid"] = _upload_image(*grid)
     return _call("/api/worker/result", method="POST", payload=payload, timeout=90)

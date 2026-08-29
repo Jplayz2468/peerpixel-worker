@@ -27,35 +27,6 @@ class DiscordUploadTests(unittest.TestCase):
         renderer.render.return_value = b"jpeg"
         return renderer
 
-    @mock.patch("peerpixel.upscale.Upscaler")
-    @mock.patch.object(api, "source_image", return_value=b"source")
-    @mock.patch.object(api, "submit_discord_result")
-    @mock.patch("peerpixel.safety.SafetyClassifier")
-    def test_aurasr_task_downloads_source_reports_tiles_and_uploads_exact_contract(
-            self, safety_type, submit, source_image, upscaler_type):
-        output = io.BytesIO()
-        Image.new("RGB", (32, 24), "blue").save(output, "JPEG")
-        upscaler_type.return_value.run.return_value = output.getvalue()
-        safety_type.return_value.classify.return_value = {"label": "normal", "nsfwScore": .01}
-        renderer = self.renderer()
-        renderer._safety = None
-        link = Link()
-        task = {"id": "x1", "stage": "upscale", "assignmentToken": "lease",
-            "operation": "upscale", "model": "aurasr-v2", "sourceUrl": "/api/worker/source/x1",
-            "sourceImageId": "source", "sourceWidth": 8, "sourceHeight": 6,
-            "width": 32, "height": 24}
-
-        worker._discord_task(link, task, renderer, "device")
-
-        source_image.assert_called_once_with("/api/worker/source/x1", device_id="device",
-                                             assignment_token="lease")
-        payload = submit.call_args.args
-        self.assertEqual(payload[0]["model"], "aurasr-v2")
-        self.assertEqual(len(payload[2]), 1)
-        result = [json.loads(message) for message in link.sent
-                  if json.loads(message).get("type") == "task_result"]
-        self.assertEqual(result[0]["stage"], "upscale")
-
     @mock.patch("peerpixel.prompt_enhancer.PromptEnhancer")
     @mock.patch("peerpixel.config.read", return_value={"promptAdapter": "/models/bootstrap"})
     def test_enhancement_injects_the_machine_local_adapter(self, _read, enhancer_type):

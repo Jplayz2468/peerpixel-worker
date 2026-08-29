@@ -277,15 +277,6 @@ class CompletedResultNotificationTests(unittest.TestCase):
         self.assertFalse(worker.notify_finished(ClosedLink(), "master1"))
 
 
-class UpscaleCapabilityTests(unittest.TestCase):
-    def test_worker_advertises_aurasr_only_when_the_optional_runtime_is_ready(self):
-        ready = mock.Mock(available=True, estimate_ms=90_000)
-        missing = mock.Mock(available=False, estimate_ms=None)
-        self.assertEqual(worker.upscale_capability(ready),
-                         ({"aurasr_v2": True}, 90_000))
-        self.assertEqual(worker.upscale_capability(missing), ({}, 0))
-
-
 class ResultSizeTests(unittest.TestCase):
     def test_the_worker_knows_the_same_ceiling_the_dispatcher_enforces(self):
         self.assertEqual(relay.MAX_RESULT_BYTES, 256 * 1024)

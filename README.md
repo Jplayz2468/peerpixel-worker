@@ -2,13 +2,12 @@
 
 Open-source volunteer compute for [PeerPixel](https://peerpixel.cc), a Discord-first community image generator. The coordinator has one public operation: direct text-to-image generation through Discord `/imagine`.
 
-Workers can advertise three independent capabilities:
+Workers can advertise two capabilities:
 
 - Prompt enhancement with Qwen. The coordinator favors an idle CUDA worker that already has the enhancer loaded when it is close to the fastest option, and prefers weaker rendering GPUs among otherwise similar choices.
 - Image rendering with FLUX. The coordinator sends the enhanced prompt to the fastest available compatible renderer. The renderer also runs its local Falconsai safety classifier before uploading the result for authoritative server moderation.
-- Four-times enlargement with AuraSR-v2. The coordinator prefers an AuraSR-capable device that has handled the fewest normal renders recently, and the device earns one weekly generation for an accepted enlargement.
 
-Discord generation uses four 512-scale, 16-step images, which the worker uploads both as selectable source cells and as one labeled 2×2 display grid. Downloads use a high-quality 4:4:4 JPEG encode. U buttons perform a source-anchored 50-step refinement at 512 scale; V buttons create four related alternatives. A completed refinement can become a separate AuraSR-v2 job with exact 4× dimensions and a 2048-pixel long edge. Workers with the optional `upscale` dependency advertise `aurasr_v2`; other workers continue enhancing and rendering normally.
+AuraSR, browser editing, inpainting, probes, reputation checks, and distributed verification are not part of the protocol. Discord generation uses four 512-scale, 16-step images, which the worker uploads both as selectable source cells and as one labeled 2×2 display grid. Downloads use a high-quality 4:4:4 JPEG encode. U buttons perform a source-anchored 1024-scale refinement with 0.12 denoise, preserving composition and shapes while lightly cleaning texture; V buttons create four source-conditioned alternatives. The coordinator chooses generation tuning such as variation strength (currently 0.55), guidance, seeds, dimensions, steps, and output count, including the model-native 1:1, 4:3, 3:4, 16:9, and 9:16 aspect families. Workers validate broad compute and safety bounds instead of pinning normal tuning releases.
 
 ## Install
 
@@ -21,8 +20,6 @@ Download the release archive, extract it, and launch:
 | Linux | `PeerPixel.sh` or `PeerPixel.desktop` |
 
 The launcher installs a private Python environment and downloads revision-pinned models from Hugging Face when needed. It does not require administrator access.
-
-CUDA contributors who want to accept 4× enlargement jobs can install the optional runtime with `uv sync --extra upscale`. The worker probes CUDA and the AuraSR package at startup and advertises `aurasr_v2` only when both are usable. AuraSR-v2 loads only for an assigned enlargement and is released afterward, so unsupported and FLUX-only machines are unaffected.
 
 ## Ask an administrator for a worker key
 
