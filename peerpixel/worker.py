@@ -534,7 +534,8 @@ def compose_grid(cells: list[bytes]) -> bytes:
     return output.getvalue()
 
 
-def _discord_task(link, task: dict, renderer, device_id: str) -> None:
+def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
+    from .liveness import PhaseLease
     token = task["assignmentToken"]
     stage = task["stage"]
     def milestone(phase: str, progress: float) -> None:
@@ -587,6 +588,9 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
         prompts = [task["prompt"]] * output_count
     safety = getattr(renderer, "_safety", None) or SafetyClassifier()
     renderer._safety = safety
+    with PhaseLease("safety_warm", 60,
+                    lambda _pulse: milestone("safety_check", .01)):
+        safety.warm()
     rendered = []
     total_steps = max(1, int(task.get("steps", 1)) * len(seeds))
     completed_steps = 0
@@ -606,49 +610,74 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
             link.send(json.dumps({"type": "progress", "taskId": task["id"],
                 "stage": "render", "assignmentToken": token,
                 "progress": min(1.0, (offset + done) / total_steps)}))
+        decode_lease = [None]
         def phase(name):
             mapped = name if name in {"encoding_prompt", "rendering", "decoding"} else "loading_flux"
             milestone(mapped, min(.9, completed_steps / total_steps + .01))
-        image = renderer.render(job, on_step=progress, on_phase=phase)
+            if mapped == "decoding" and decode_lease[0] is None:
+                decode_lease[0] = PhaseLease(
+                    "decoding", 90,
+                    lambda _pulse: milestone("decoding", min(.9, completed_steps / total_steps + .01)))
+                decode_lease[0].__enter__()
+        try:
+            image = renderer.render(job, on_step=progress, on_phase=phase)
+        finally:
+            if decode_lease[0] is not None:
+                decode_lease[0].__exit__(None, None, None)
         milestone("safety_check", min(.92, (completed_steps + int(task.get("steps", 1))) / total_steps))
-        rendered.append((image, {"moderation": safety.classify(image)}))
+        with PhaseLease("safety_check", 30,
+                        lambda _pulse: milestone("safety_check", min(
+                            .92, (completed_steps + int(task.get("steps", 1))) / total_steps))):
+            moderation = safety.classify(image)
+        rendered.append((image, {"moderation": moderation}))
         completed_steps += int(task.get("steps", 1))
     grid = None
     if len(rendered) == 4:
         milestone("composing_grid", .94)
         scores = [float(item[1]["moderation"].get("nsfwScore", 0.0) or 0.0) for item in rendered]
         unsafe = any(item[1]["moderation"].get("label") == "nsfw" for item in rendered)
-        grid = (compose_grid([item[0] for item in rendered]), {"moderation": {
-            "label": "nsfw" if unsafe else "normal", "nsfwScore": max(scores, default=0.0),
-        }})
+        with PhaseLease("composing_grid", 30,
+                        lambda _pulse: milestone("composing_grid", .94)):
+            grid = (compose_grid([item[0] for item in rendered]), {"moderation": {
+                "label": "nsfw" if unsafe else "normal", "nsfwScore": max(scores, default=0.0),
+            }})
     milestone("uploading", .97)
     link.send(json.dumps({"type": "task_result", "taskId": task["id"],
         "stage": "render", "assignmentToken": token, "resultId": task["id"]}))
     # The socket result creates the upload lease. A very short retry handles
     # propagation without ever accepting a stale assignment.
     last_error = None
-    for attempt in range(5):
-        try:
-            api.submit_discord_result(task, device_id, rendered, grid)
-            # Release FLUX after the result is safely delivered. Doing this at
-            # the start of the next enhancement made users wait at 2% while a
-            # large CUDA pipeline was synchronously collected.
-            renderer.unload()
-            return
-        except api.ApiError as error:
-            last_error = error
-            if error.status != 409 and error.status < 500:
-                break
-            if attempt == 4:
-                break
-            time.sleep(0.25 * (attempt + 1))
-        except Exception as error:  # transient transport failure; keep rendered bytes in memory
-            last_error = error
-            if attempt == 4:
-                break
-            time.sleep(0.25 * (attempt + 1))
+    with PhaseLease("uploading", 90, lambda _pulse: milestone("uploading", .97)):
+        for attempt in range(5):
+            try:
+                api.submit_discord_result(task, device_id, rendered, grid)
+                # Release FLUX after the result is safely delivered. Doing this at
+                # the start of the next enhancement made users wait at 2% while a
+                # large CUDA pipeline was synchronously collected.
+                renderer.unload()
+                return
+            except api.ApiError as error:
+                last_error = error
+                if error.status != 409 and error.status < 500:
+                    break
+                if attempt == 4:
+                    break
+                time.sleep(0.25 * (attempt + 1))
+            except Exception as error:  # transient transport failure; keep rendered bytes in memory
+                last_error = error
+                if attempt == 4:
+                    break
+                time.sleep(0.25 * (attempt + 1))
     reason = last_error.code if isinstance(last_error, api.ApiError) else type(last_error).__name__
     api.report_discord_result_failure(task, device_id, reason)
+
+
+def _discord_task(link, task: dict, renderer, device_id: str) -> None:
+    from .liveness import cleanup_after_task
+    try:
+        return _discord_task_inner(link, task, renderer, device_id)
+    finally:
+        cleanup_after_task(renderer)
 
 
 def build_trainer_capability(saved: dict, renderer, *, client=None):
@@ -758,6 +787,10 @@ def run(renderer, once: bool = False, trainer_capability=None) -> int:
         from websockets.sync.client import connect
     except ImportError:
         raise SystemExit("missing dependency: run `peerpixel setup`") from None
+    from .safety import SafetyClassifier
+    safety = getattr(renderer, "_safety", None) or SafetyClassifier()
+    safety.warm()
+    renderer._safety = safety
     trainer_capability = trainer_capability or build_trainer_capability(saved, renderer)
     advertised = {"enhance": True, "render": True}
     if "train" in trainer_capability.capabilities:
