@@ -572,6 +572,47 @@ def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
             "provenance": enhancer.provenance}))
         return
 
+    if stage == "upscale":
+        from .safety import SafetyClassifier
+        from .upscale import UpscaleJob, Upscaler
+        milestone("loading_upscaler", .02)
+        source = api.source_image(task["sourceUrl"], device_id=device_id,
+                                  assignment_token=token)
+        renderer.unload()
+        upscaler = Upscaler()
+        job = UpscaleJob.from_payload(task)
+        def tile(done, total):
+            progress = .15 + .70 * done / max(1, total)
+            link.send(json.dumps({"type": "progress", "taskId": task["id"],
+                "stage": "upscale", "assignmentToken": token, "phase": "upscaling",
+                "progress": min(.85, progress), "completed": done, "total": total}))
+        image = upscaler.run(job, source, on_tile=tile)
+        milestone("encoding_export", .88)
+        safety = getattr(renderer, "_safety", None) or SafetyClassifier()
+        renderer._safety = safety
+        safety.warm()
+        moderation = safety.classify(image)
+        rendered = [(image, {"moderation": moderation})]
+        milestone("uploading", .96)
+        link.send(json.dumps({"type": "task_result", "taskId": task["id"],
+            "stage": "upscale", "assignmentToken": token, "resultId": task["id"]}))
+        last_error = None
+        for attempt in range(5):
+            try:
+                api.submit_discord_result(task, device_id, rendered)
+                return
+            except api.ApiError as error:
+                last_error = error
+                if error.status != 409 and error.status < 500:
+                    break
+            except Exception as error:  # noqa: BLE001 - retry saved bytes only
+                last_error = error
+            if attempt < 4:
+                time.sleep(.25 * (attempt + 1))
+        reason = last_error.code if isinstance(last_error, api.ApiError) else type(last_error).__name__
+        api.report_discord_result_failure(task, device_id, reason)
+        return
+
     from .safety import SafetyClassifier
     enhancer = getattr(renderer, "_enhancer", None)
     if enhancer is not None:
@@ -729,6 +770,12 @@ def send_idle_heartbeat(link) -> None:
     link.send(json.dumps({"type": "heartbeat"}))
 
 
+def upscale_capability(support) -> tuple[dict, int]:
+    if not getattr(support, "available", False):
+        return {}, 0
+    return {"aurasr_v2": True}, int(getattr(support, "estimate_ms", 0) or 120_000)
+
+
 def handle_training_signal(message: dict, trainer_capability) -> bool:
     """Claim training only after the coordinator says a queued run exists."""
     if message.get("type") not in ("welcome", "ack") or message.get("trainingAvailable") is not True:
@@ -804,7 +851,9 @@ def run(renderer, once: bool = False, trainer_capability=None) -> int:
     from .supervisor import emit_control
     emit_control({"type": "ready"})
     trainer_capability = trainer_capability or build_trainer_capability(saved, renderer)
-    advertised = {"enhance": True, "render": True}
+    from .upscale import probe_upscale_support
+    upscale_advertised, upscale_estimate = upscale_capability(probe_upscale_support())
+    advertised = {"enhance": True, "render": True, **upscale_advertised}
     if "train" in trainer_capability.capabilities:
         advertised["train"] = True
     capabilities = quote(json.dumps(advertised, separators=(",", ":")))
@@ -812,7 +861,8 @@ def run(renderer, once: bool = False, trainer_capability=None) -> int:
            + f"?deviceId={quote(str(saved['deviceId']))}&capabilities={capabilities}"
            + f"&accelerator={quote(str(saved.get('accelerator', 'unknown')))}&enhancerLoaded=0"
            + f"&version={quote(updater.installed())}"
-           + f"&renderEstimateMs={int(saved.get('benchMs') or 0)}")
+           + f"&renderEstimateMs={int(saved.get('benchMs') or 0)}"
+           + f"&upscaleEstimateMs={upscale_estimate}")
     headers = {"authorization": f"Bearer {saved['token']}", "user-agent": api.USER_AGENT}
     completed = 0
     backoff = RECONNECT_MIN
