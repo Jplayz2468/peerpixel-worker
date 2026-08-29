@@ -5,6 +5,7 @@ import json
 import hashlib
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 MAX_NEW_TOKENS = 192
@@ -103,6 +104,121 @@ _TEXT_SURFACE = (
 _TEXT_VERB = r"(?:reading|reads|saying|says|bearing|titled|with\s+(?:the\s+)?(?:text|words))"
 
 
+@dataclass(frozen=True)
+class VisibleText:
+    copy: str
+    role: str
+    surface: str | None = None
+    placement: str | None = None
+    appearance: str | None = None
+
+
+_VISIBLE_ROLES = (
+    "logo wordmark", "screen text", "garment text", "speech bubble",
+    "headline", "subheading", "caption", "subtitle", "title", "label",
+)
+_VISIBLE_SURFACES = (
+    "product packaging", "package", "packaging", "phone screen", "screen",
+    "interface", "menu", "sign", "banner", "poster", "billboard", "marquee",
+    "book cover", "album cover", "cover", "shirt", "t-shirt", "garment",
+    "speech bubble",
+)
+_ROLE_DEFAULTS = {
+    "headline": "as large, clear, high-contrast headline lettering",
+    "subheading": "as smaller, clear, high-contrast subheading lettering",
+    "logo wordmark": "as a crisp, legible logo wordmark",
+    "screen text": "as sharp, legible interface typography",
+    "garment text": "as clear lettering integrated into the fabric",
+    "speech bubble": "as clear, correctly spelled speech-bubble lettering",
+    "label": "as crisp, legible label typography",
+    "caption": "as clear caption typography",
+    "subtitle": "as clear subtitle typography",
+    "title": "as prominent, legible title typography",
+}
+
+
+def _role_for(surface: str | None, verb: str | None, explicit: str | None) -> str:
+    if explicit:
+        return explicit.lower()
+    surface = (surface or "").lower()
+    if surface in {"phone screen", "screen", "interface"}:
+        return "screen text"
+    if surface in {"shirt", "t-shirt", "garment"}:
+        return "garment text"
+    if surface == "speech bubble":
+        return "speech bubble"
+    if verb and verb.lower() in {"labeled", "labelled"}:
+        return "label"
+    if "cover" in surface and verb and verb.lower() == "titled":
+        return "title"
+    return surface or "visible text"
+
+
+def extract_visible_text(prompt: str) -> tuple[VisibleText, ...]:
+    """Find exact rendered copy and retain its visual role and nearby styling."""
+    source = str(prompt or "")
+    surface_names = "|".join(map(re.escape, _VISIBLE_SURFACES))
+    role_names = "|".join(map(re.escape, _VISIBLE_ROLES))
+    cue = re.compile(
+        rf"(?:(?P<surface>{surface_names})\b[^\"“”'\n]{{0,70}}?"
+        rf"(?P<verb>reading|reads|displaying|displays|showing|shows|bearing|bears|"
+        rf"labeled|labelled|titled|saying|says|with\s+(?:the\s+)?(?:text|words|copy))"
+        rf"|(?P<role>{role_names}))\s*[:=-]?\s*$",
+        re.IGNORECASE,
+    )
+    quoted = re.compile(r'["“]([^"”\n]{1,120})["”]|\'([^\'\n]{1,120})\'')
+    found: list[VisibleText] = []
+    for match in quoted.finditer(source):
+        copy = re.sub(r"\s+", " ", next(group for group in match.groups() if group is not None)).strip()
+        before = source[max(0, match.start() - 140):match.start()]
+        context = cue.search(before)
+        if not context:
+            continue
+        surface = (context.group("surface") or "").lower() or None
+        role = _role_for(surface, context.group("verb"), context.group("role"))
+        after = source[match.end():match.end() + 100]
+        detail = re.match(r"\s*([^.;!?]*?)(?=\s+and\s+(?:subheading|headline|caption|title|logo)|[.;!?]|$)", after,
+                          re.IGNORECASE)
+        nearby = re.sub(r"\s+", " ", detail.group(1)).strip(" ,") if detail else ""
+        placement = nearby if re.search(r"\b(?:top|bottom|above|below|left|right|center|middle)\b", nearby,
+                                         re.IGNORECASE) else None
+        appearance = nearby if re.search(
+            r"\b(?:font|type|letter|serif|sans|script|bold|condensed|italic|neon|#[0-9a-f]{6}|"
+            r"red|orange|yellow|green|blue|purple|pink|black|white|cream|large|small|huge)\b",
+            nearby, re.IGNORECASE) else None
+        item = VisibleText(copy=copy, role=role, surface=surface,
+                           placement=placement, appearance=appearance)
+        if copy and all(existing.copy != copy for existing in found):
+            found.append(item)
+    return tuple(found)
+
+
+def _visible_items(values) -> tuple[VisibleText, ...]:
+    items = []
+    for value in values or ():
+        items.append(value if isinstance(value, VisibleText)
+                     else VisibleText(str(value), "visible text"))
+    return tuple(items)
+
+
+def enforce_visible_text(prompt: str, requested) -> str:
+    """Front-load exact FLUX typography clauses after any model enhancement."""
+    items = _visible_items(requested)
+    if not items:
+        return str(prompt or "").strip()
+    clauses = []
+    for item in items:
+        clause = f'The {item.role} displays the exact text "{item.copy}"'
+        details = []
+        for value in (item.placement, item.appearance):
+            if value and value.lower() not in {known.lower() for known in details}:
+                details.append(value)
+        clause += f" {', '.join(details)}" if details else f" {_ROLE_DEFAULTS.get(item.role, 'in clear, high-contrast, correctly spelled lettering')}"
+        clauses.append(clause.rstrip(" .") + ".")
+    base = str(prompt or "").strip()
+    return " ".join(clauses + ([base] if base else []))
+
+
 def requested_visible_text(prompt: str) -> tuple[str, ...]:
     """Extract copy that must survive enhancement byte-for-byte.
 
@@ -110,6 +226,9 @@ def requested_visible_text(prompt: str) -> tuple[str, ...]:
     accidentally become typography. Quoted copy is preferred; an all-caps
     unquoted phrase is accepted because it is unambiguous in natural prompts.
     """
+    rich = extract_visible_text(prompt)
+    if rich:
+        return tuple(item.copy for item in rich)
     source = str(prompt or "")
     found = []
     quoted = re.compile(
@@ -167,17 +286,13 @@ def parse_enhancement(text: str, *, fallback_prompt: str,
         except (json.JSONDecodeError, TypeError):
             pass
     prompt = prompt or fallback_prompt.strip()
-    for copy in visible_text:
+    items = _visible_items(visible_text)
+    for item in items:
+        copy = item.copy
         for left, right in (("'", "'"), ("‘", "’"), ("“", "”")):
             prompt = prompt.replace(f"{left}{copy}{right}", f'"{copy}"')
         prompt = re.sub(
             rf'(?<!["\']){re.escape(copy)}(?!["\'])', f'"{copy}"', prompt,
-        )
-    missing = [copy for copy in visible_text if copy not in prompt]
-    if missing:
-        exact = ", ".join(f'"{copy}"' for copy in missing)
-        prompt = prompt.rstrip().rstrip(".!?") + (
-            f', featuring exact visible text {exact} with clear, correctly spelled typography.'
         )
     # Model instructions are not a dependable output boundary. Keep the first
     # two complete sentences so an over-creative response cannot bloat every
@@ -185,7 +300,8 @@ def parse_enhancement(text: str, *, fallback_prompt: str,
     ends = list(re.finditer(r"[.!?](?=\s|$)", prompt))
     if len(ends) >= 2:
         prompt = prompt[:ends[1].end()].strip()
-    if visible_text:
+    prompt = enforce_visible_text(prompt, items)
+    if items:
         parts = [part.strip() for part in negative.split(",") if part.strip()]
         parts = [part for part in parts if part.lower() not in {"unintended text", "letters"}]
         for rule in REQUESTED_TEXT_NEGATIVE.split(", "):
@@ -205,13 +321,13 @@ def parse_enhancement(text: str, *, fallback_prompt: str,
 
 
 def enhancement_messages(prompt: str, style: str) -> list[dict[str, str]]:
-    visible_text = requested_visible_text(prompt)
+    visible_text = extract_visible_text(prompt)
     if style != "auto" and style not in STYLES:
         raise ValueError(f"unknown_style:{style}")
     template = negative_template(style, visible_text) if style != "auto" else COMMON_NEGATIVE
     text_instruction = ""
     if visible_text:
-        copies = ", ".join(f'"{copy}"' for copy in visible_text)
+        copies = ", ".join(f'"{item.copy}"' for item in visible_text)
         text_instruction = (
             f"Exact visible text requested: {copies}\n"
             "Preserve that copy exactly and describe its typography, placement, material, and legibility.\n"
@@ -341,7 +457,7 @@ class PromptEnhancer:
         )
         inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
         width = inputs.input_ids.shape[-1]
-        visible_text = requested_visible_text(prompt)
+        visible_text = extract_visible_text(prompt)
         pairs = []
         try:
             base_seed = int(policy["seed"]) & 0x7fffffff
@@ -376,7 +492,7 @@ class PromptEnhancer:
                      resolved_negative=None) -> dict[str, str]:
         if self.adapter_path and enabled and not resolved:
             self.warm()
-            visible_text = requested_visible_text(prompt)
+            visible_text = extract_visible_text(prompt)
             generated = self._generate_text(
                 bootstrap_messages(prompt), max_new_tokens=MAX_NEW_TOKENS,
                 seed=sampling_seed(prompt, "bootstrap"),
@@ -396,13 +512,13 @@ class PromptEnhancer:
             return {
                 "prompt": with_style_suffix(prompt, style),
                 "negativePrompt": negative_template(
-                    style, requested_visible_text(prompt),
+                    style, extract_visible_text(prompt),
                 ),
             }
         if style not in STYLES and style != "auto":
             raise ValueError(f"unknown_style:{style}")
         self.warm()
-        visible_text = requested_visible_text(prompt)
+        visible_text = extract_visible_text(prompt)
         messages = enhancement_messages(prompt, style)
         generated_text = self._generate_text(
             messages, max_new_tokens=MAX_NEW_TOKENS,

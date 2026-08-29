@@ -9,7 +9,7 @@ from unittest import mock
 
 from peerpixel.prompt_enhancer import (
     PromptEnhancer, SYSTEM_INSTRUCTION, bootstrap_messages, enhancement_messages,
-    negative_template, parse_enhancement, sampling_seed,
+    enforce_visible_text, extract_visible_text, negative_template, parse_enhancement, sampling_seed,
     requested_visible_text, with_style_suffix,
 )
 from peerpixel.safety import SafetyClassifier, THRESHOLD
@@ -278,6 +278,59 @@ class StyledPipelineTests(unittest.TestCase):
         )
         self.assertEqual(requested_visible_text('a man saying "hello" to his friend'), ())
 
+    def test_visible_copy_covers_product_interface_menu_garment_and_wordmark_roles(self):
+        requests = extract_visible_text(
+            'A cereal package labeled "MOON-O!", a phone screen displaying "SYNCED ✓", '
+            'and a menu with headline "DINNER" and subheading "UNTIL 2 A.M."; '
+            'the chef wears a shirt reading "NIGHT SHIFT" beside the logo wordmark "NOVA-7".'
+        )
+        self.assertEqual([(item.copy, item.role) for item in requests], [
+            ("MOON-O!", "label"),
+            ("SYNCED ✓", "screen text"),
+            ("DINNER", "headline"),
+            ("UNTIL 2 A.M.", "subheading"),
+            ("NIGHT SHIFT", "garment text"),
+            ("NOVA-7", "logo wordmark"),
+        ])
+
+    def test_flux_text_contract_frontloads_ordered_exact_copy_and_concrete_typography(self):
+        raw = ('A poster with headline "PEER/PIXEL!" at the top in huge condensed red letters '
+               'and subheading "CREATE TOGETHER" below it in small white sans-serif type.')
+        enforced = enforce_visible_text(
+            "A graphic community poster with a balanced vertical layout.",
+            extract_visible_text(raw),
+        )
+        self.assertLess(enforced.index('"PEER/PIXEL!"'), enforced.index('"CREATE TOGETHER"'))
+        self.assertTrue(enforced.startswith('The headline displays the exact text "PEER/PIXEL!"'))
+        self.assertIn("top", enforced)
+        self.assertIn("huge condensed red letters", enforced)
+        self.assertIn("below", enforced)
+        self.assertIn("small white sans-serif", enforced)
+
+    def test_visible_dialogue_requires_an_explicit_image_text_role(self):
+        self.assertEqual(extract_visible_text('a woman says "WAIT!" to a cyclist'), ())
+        self.assertEqual(
+            [(item.copy, item.role) for item in extract_visible_text(
+                'a speech bubble saying "WAIT!" above the woman')],
+            [("WAIT!", "speech bubble")],
+        )
+
+    def test_all_enhancement_results_receive_the_same_exact_text_contract(self):
+        enhancer = PromptEnhancer()
+        enhancer.warm = lambda: None
+        enhancer.tokenizer = mock.Mock()
+        enhancer.tokenizer.apply_chat_template.return_value = "chat"
+        enhancer.tokenizer.return_value = types.SimpleNamespace(
+            input_ids=types.SimpleNamespace(shape=(1, 2)), to=lambda _device: None)
+        enhancer.model = mock.Mock(device="cpu")
+        with mock.patch.object(enhancer, "_generate_text", return_value="A clean package on a shelf."):
+            result = enhancer.enhance_pair(
+                'a package labeled "NOVA-7"', "photoreal", enabled=True)
+        self.assertTrue(result["prompt"].startswith(
+            'The label displays the exact text "NOVA-7"'))
+        self.assertNotIn("unintended text", result["negativePrompt"])
+        self.assertNotIn(", letters,", f', {result["negativePrompt"]},')
+
     def test_text_requests_change_qwens_instruction_and_negative_template(self):
         content = enhancement_messages(
             'a book cover titled "THE LONG WAY HOME"', "illustration",
@@ -295,7 +348,7 @@ class StyledPipelineTests(unittest.TestCase):
             fallback_negative="blur",
             visible_text=("MOON PALACE",),
         )
-        self.assertIn('exact visible text "MOON PALACE"', parsed["prompt"])
+        self.assertIn('exact text "MOON PALACE"', parsed["prompt"])
         self.assertNotIn("unintended text", parsed["negativePrompt"])
         self.assertNotIn("letters", parsed["negativePrompt"])
         self.assertIn("misspelled requested text", parsed["negativePrompt"])
