@@ -76,6 +76,35 @@ Training runs only after the generation child exits. The supervisor bounds the
 trainer child, kills its complete process tree on timeout, and starts a fresh
 generation child on success or failure.
 
+## FLUX Typography Contract
+
+Visible copy is extracted from the raw user prompt before enhancement and is
+restored deterministically afterward. Qwen and learned adapters may improve the
+surrounding scene but cannot omit, paraphrase, translate, reorder, extend, or
+change the case and punctuation of requested copy.
+
+Detection covers quoted copy and explicit text roles on signs, banners,
+posters, billboards, marquees, product packaging, labels, book and album
+covers, headlines, captions, subtitles, speech bubbles, screens, interfaces,
+menus, garments, and logo wordmarks. Spoken dialogue remains excluded unless
+the user explicitly requests a visible speech bubble, subtitle, or caption.
+
+The final FLUX prompt follows Black Forest Labs' text-rendering guidance. Each
+copy item is enclosed in double quotes, front-loaded when it is a primary
+headline, tied to its physical surface or semantic role, and described with
+placement, relative size, lettering style, contrast, material, and supplied
+color or hex value. Multiple strings retain their source order and distinct
+roles. The deterministic layer adds no invented words.
+
+When visible copy is requested, negative conditioning must not contain generic
+anti-text concepts such as `text`, `letters`, or `typography`. It may target
+specific failures such as misspelling, duplication, cropping, or gibberish.
+When no copy is requested, existing unintended-text protection remains.
+
+Typography behavior is shared by batched Discord enhancement, adapter-backed
+enhancement, fallback enhancement, and enhancement-disabled paths. It is not
+implemented with pixel post-processing or a second image model.
+
 ## Diagnostics and Recovery
 
 Structured journal lines record runtime start/stop reason, job ID, phase start
@@ -105,6 +134,17 @@ depend on an external service manager.
 - Finalization timeouts report stable, redacted reasons.
 - Training uses a distinct PID and generation resumes in a new PID after every
   terminal training outcome.
+- Quoted and role-based text requests preserve exact copy across Qwen success,
+  malformed output, fallback, adapters, batching, and enhancement-disabled
+  paths.
+- Multiple text elements become ordered, separately described FLUX clauses;
+  dialogue without a visible text role is not promoted into image copy.
+- Typography prompts use quoted exact strings plus placement, size, lettering,
+  contrast, and supplied color, and their negatives contain no generic
+  anti-text terms.
+- Fixed-seed RTX fixtures cover a neon sign, product package, poster with
+  headline and subheading, interface screen, garment, and punctuation-heavy
+  logo wordmark; their output and phase timings are retained for review.
 - Cleanup releases temporary references and accelerator caches.
 - Swap, RSS, GPU watermark, task-count, and age thresholds recycle only between
   assignments.
