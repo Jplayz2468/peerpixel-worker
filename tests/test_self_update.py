@@ -86,6 +86,18 @@ class WhenItRunsTests(unittest.TestCase):
         self.assertEqual(recorder.applied, 1)
         self.assertEqual(recorder.restarted, 1)
 
+    def test_a_runtime_child_asks_its_supervisor_to_restart_after_update(self):
+        from peerpixel.supervisor import RUNTIME_CHILD, UPDATE_EXIT
+
+        recorder = Recorder(latest="v0.13.1", installed="0.13.0")
+        with mock.patch.multiple(cli.updater, installed=recorder.installed,
+                                 apply=recorder.apply), \
+             mock.patch.dict(os.environ, {RUNTIME_CHILD: "1"}, clear=False), \
+             mock.patch.object(cli.runtime, "restart",
+                               side_effect=AssertionError("child must not exec itself")):
+            with self.assertRaisesRegex(SystemExit, str(UPDATE_EXIT)):
+                cli.server_update("0.13.1")
+
 
 class LoopTests(unittest.TestCase):
     def setUp(self):

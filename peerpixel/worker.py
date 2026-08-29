@@ -536,12 +536,20 @@ def compose_grid(cells: list[bytes]) -> bytes:
 
 def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
     from .liveness import PhaseLease
+    from .supervisor import emit_control
     token = task["assignmentToken"]
     stage = task["stage"]
     def milestone(phase: str, progress: float) -> None:
         link.send(json.dumps({"type": "progress", "taskId": task["id"],
             "stage": stage, "assignmentToken": token, "phase": phase,
             "progress": max(0.0, min(1.0, progress))}))
+    def phase_lease(phase: str, timeout: float, progress: float) -> PhaseLease:
+        def pulse(event):
+            milestone(phase, progress)
+            emit_control({"type": "phase", "phase": phase, "timeout": timeout,
+                          "rss_bytes": event.rss_bytes, "swap_bytes": event.swap_bytes,
+                          "accelerator_bytes": event.accelerator_bytes})
+        return PhaseLease(phase, timeout, pulse)
     if stage == "enhance":
         milestone("loading_prompt_model", .02)
         from .prompt_enhancer import PromptEnhancer
@@ -588,8 +596,7 @@ def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
         prompts = [task["prompt"]] * output_count
     safety = getattr(renderer, "_safety", None) or SafetyClassifier()
     renderer._safety = safety
-    with PhaseLease("safety_warm", 60,
-                    lambda _pulse: milestone("safety_check", .01)):
+    with phase_lease("safety_warm", 60, .01):
         safety.warm()
     rendered = []
     total_steps = max(1, int(task.get("steps", 1)) * len(seeds))
@@ -615,9 +622,8 @@ def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
             mapped = name if name in {"encoding_prompt", "rendering", "decoding"} else "loading_flux"
             milestone(mapped, min(.9, completed_steps / total_steps + .01))
             if mapped == "decoding" and decode_lease[0] is None:
-                decode_lease[0] = PhaseLease(
-                    "decoding", 90,
-                    lambda _pulse: milestone("decoding", min(.9, completed_steps / total_steps + .01)))
+                decode_lease[0] = phase_lease(
+                    "decoding", 90, min(.9, completed_steps / total_steps + .01))
                 decode_lease[0].__enter__()
         try:
             image = renderer.render(job, on_step=progress, on_phase=phase)
@@ -625,9 +631,8 @@ def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
             if decode_lease[0] is not None:
                 decode_lease[0].__exit__(None, None, None)
         milestone("safety_check", min(.92, (completed_steps + int(task.get("steps", 1))) / total_steps))
-        with PhaseLease("safety_check", 30,
-                        lambda _pulse: milestone("safety_check", min(
-                            .92, (completed_steps + int(task.get("steps", 1))) / total_steps))):
+        with phase_lease("safety_check", 30, min(
+                .92, (completed_steps + int(task.get("steps", 1))) / total_steps)):
             moderation = safety.classify(image)
         rendered.append((image, {"moderation": moderation}))
         completed_steps += int(task.get("steps", 1))
@@ -636,8 +641,7 @@ def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
         milestone("composing_grid", .94)
         scores = [float(item[1]["moderation"].get("nsfwScore", 0.0) or 0.0) for item in rendered]
         unsafe = any(item[1]["moderation"].get("label") == "nsfw" for item in rendered)
-        with PhaseLease("composing_grid", 30,
-                        lambda _pulse: milestone("composing_grid", .94)):
+        with phase_lease("composing_grid", 30, .94):
             grid = (compose_grid([item[0] for item in rendered]), {"moderation": {
                 "label": "nsfw" if unsafe else "normal", "nsfwScore": max(scores, default=0.0),
             }})
@@ -647,7 +651,7 @@ def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
     # The socket result creates the upload lease. A very short retry handles
     # propagation without ever accepting a stale assignment.
     last_error = None
-    with PhaseLease("uploading", 90, lambda _pulse: milestone("uploading", .97)):
+    with phase_lease("uploading", 90, .97):
         for attempt in range(5):
             try:
                 api.submit_discord_result(task, device_id, rendered, grid)
@@ -674,10 +678,15 @@ def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
 
 def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     from .liveness import cleanup_after_task
+    from .supervisor import emit_control
+    emit_control({"type": "task_started"})
     try:
         return _discord_task_inner(link, task, renderer, device_id)
     finally:
-        cleanup_after_task(renderer)
+        memory = cleanup_after_task(renderer)
+        emit_control({"type": "idle", "render_completed": task.get("stage") == "render",
+                      "rss_bytes": memory.rss_bytes, "swap_bytes": memory.swap_bytes,
+                      "accelerator_bytes": memory.accelerator_bytes})
 
 
 def build_trainer_capability(saved: dict, renderer, *, client=None):
@@ -791,6 +800,8 @@ def run(renderer, once: bool = False, trainer_capability=None) -> int:
     safety = getattr(renderer, "_safety", None) or SafetyClassifier()
     safety.warm()
     renderer._safety = safety
+    from .supervisor import emit_control
+    emit_control({"type": "ready"})
     trainer_capability = trainer_capability or build_trainer_capability(saved, renderer)
     advertised = {"enhance": True, "render": True}
     if "train" in trainer_capability.capabilities:

@@ -305,6 +305,9 @@ def server_update(required: str, *, mode: str | None = None) -> bool:
     step_line(True, f"Updated to {result['version']}.")
     note("Restarting into it.")
     os.environ[UPDATED] = str(result["version"])
+    from .supervisor import RUNTIME_CHILD, UPDATE_EXIT
+    if os.environ.get(RUNTIME_CHILD) == "1":
+        raise SystemExit(UPDATE_EXIT)
     runtime.restart()
     return True
 
@@ -316,10 +319,8 @@ def cmd_start(argv: list[str]) -> None:
     if not onboard(interactive=sys.stdin.isatty() and "--yes" not in argv):
         raise SystemExit(1)
     need_libraries()
-    from .render import Renderer
-    from .worker import run as run_worker
-
-    run_worker(Renderer(), once="--once" in argv)
+    from .supervisor import supervise
+    raise SystemExit(supervise(once="--once" in argv))
 
 
 def cmd_setup(argv: list[str]) -> None:
