@@ -51,4 +51,14 @@ Every completed contributed render adds one bonus generation to the owner's curr
 
 The official worker does not print assigned prompts or save image previews. Inference still requires prompts and pixels in worker memory, and this project is open source, so a modified worker could inspect assigned content. Contributors must not inspect, retain, or republish it.
 
+## Owner-only Discord welcome listener
+
+Ordinary workers never receive Discord credentials. The server owner can enable
+the join-event listener on one always-on worker by setting
+`PEERPIXEL_DISCORD_BOT_TOKEN`, `PEERPIXEL_DISCORD_GUILD_ID`, and
+`PEERPIXEL_DISCORD_IMAGINE_CHANNEL_ID` in that worker's environment. Enable
+**Server Members Intent** for the bot in Discord's Developer Portal. New human
+members then receive one DM directing them to `/imagine` inside the server;
+members with closed DMs are skipped without affecting rendering.
+
 The repository includes the Apache 2.0 license and third-party notices for distributed model components. No model weights are committed to Git.
