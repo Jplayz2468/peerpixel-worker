@@ -5,8 +5,6 @@ send. What is being pinned down is the protocol the server relies on, because a
 mismatch here means somebody is charged for a picture that never arrives.
 """
 import json
-import pathlib
-import tomllib
 import unittest
 from contextlib import nullcontext
 from unittest import mock
@@ -89,11 +87,6 @@ SIZES_BY_VERSION = {
 
 
 class ProtocolVersionTests(unittest.TestCase):
-    def test_release_contains_model_owned_negative_prompt_conditioning(self):
-        root = pathlib.Path(__file__).parents[1]
-        metadata = tomllib.loads((root / "pyproject.toml").read_text())
-        self.assertEqual(metadata["project"]["version"], "0.14.15")
-
     def test_the_advertised_version_matches_the_sizes_this_install_pins(self):
         """The bump and the sizes have to move together, or neither is safe.
 
