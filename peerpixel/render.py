@@ -776,7 +776,8 @@ class Renderer:
         if self._safety is None:
             self._safety = SafetyClassifier()
         moderation = self._safety.classify(jpeg)
-        runtime = "peerpixel-worker/0.14.0"
+        from .version import RUNTIME_VERSION
+        runtime = RUNTIME_VERSION
         source_digest = (hashlib.sha256(job.get("_editSource", b"")).hexdigest()
                          if job.get("editMode") else None)
         mask_digest = (hashlib.sha256(job.get("_editMask", b"")).hexdigest()

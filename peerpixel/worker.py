@@ -21,6 +21,7 @@ import urllib.request
 from . import api, compare, config, console, plans, relay, settings, updater
 from .console import DIM, OFF, clock, say, step_line
 from .system_status import SystemStatus
+from .version import RUNTIME_VERSION
 
 #: What this install speaks, and it must match `PROTOCOL_VERSION` in the
 #: server's `public/generation-policy.mjs`.
@@ -427,7 +428,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                             "attestations": [{"operation": "upscale",
                                 "inputDigest": hashlib.sha256(source).hexdigest(),
                                 "outputDigest": hashlib.sha256(jpeg).hexdigest(),
-                                "runtimeVersion": "peerpixel-worker/0.14.0"}]}
+                                "runtimeVersion": RUNTIME_VERSION}]}
             elif hasattr(renderer, "generate_job"):
                 render_job = job
                 if job.get("editMode"):
