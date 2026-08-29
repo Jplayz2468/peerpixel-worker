@@ -2,7 +2,7 @@
 
 ## Goal
 
-Turn selection and resolution enhancement into two explicit Discord actions. `U1`–`U4` spends one weekly generation to produce a source-anchored, 50-step image at the existing 512-scale aspect dimensions. The completed refinement offers a separate `4× to 2K · 1 generation` action that spends one weekly generation and uses AuraSR-v2 to produce an exact four-times-larger permanent result.
+Turn selection and resolution enhancement into two explicit Discord actions. `U1`–`U4` spends one weekly generation to produce a source-anchored, 50-step image at the existing 512-scale aspect dimensions. The completed refinement offers a separate `4× to 2K` action that spends one weekly generation and uses AuraSR-v2 to produce an exact four-times-larger permanent result.
 
 This design spans the `peerpixel` coordinator and the separate `peerpixel-worker` runtime. The repositories share the operation names and wire contract defined here.
 
@@ -10,7 +10,7 @@ This design spans the `peerpixel` coordinator and the separate `peerpixel-worker
 
 An initial or variation grid keeps its existing `U1`–`U4` and `V1`–`V4` controls. Selecting `U1`–`U4` creates a `refine` job with one output, 50 diffusion steps, and the trusted 512-scale dimensions for the grid aspect. It costs one weekly generation.
 
-The completed refinement includes one owner-scoped button labeled `4× to 2K · 1 generation`. Exact four-times scaling means 512×512 becomes 2048×2048, 512×384 becomes 2048×1536, 384×512 becomes 1536×2048, 512×288 becomes 2048×1152, and 288×512 becomes 1152×2048. The label uses “2K” as friendly shorthand for the 2048-pixel long edge.
+The completed refinement includes one owner-scoped button labeled `4× to 2K`. Exact four-times scaling means 512×512 becomes 2048×2048, 512×384 becomes 2048×1536, 384×512 becomes 1536×2048, 512×288 becomes 2048×1152, and 288×512 becomes 1152×2048. The label uses “2K” as friendly shorthand for the 2048-pixel long edge.
 
 Pressing the button reserves another weekly generation and creates an `upscale` child job referencing the refined image. The interaction receives private progress. The accepted result is delivered using the refined image's visibility rules and has no recursive upscale control.
 
