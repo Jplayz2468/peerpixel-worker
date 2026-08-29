@@ -427,7 +427,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
                             "attestations": [{"operation": "upscale",
                                 "inputDigest": hashlib.sha256(source).hexdigest(),
                                 "outputDigest": hashlib.sha256(jpeg).hexdigest(),
-                                "runtimeVersion": "peerpixel-worker/1.14.8"}]}
+                                "runtimeVersion": "peerpixel-worker/0.14.0"}]}
             elif hasattr(renderer, "generate_job"):
                 render_job = job
                 if job.get("editMode"):
@@ -751,11 +751,9 @@ def handle_bootstrap_signal(message: dict, saved: dict) -> bool:
 def run(renderer, once: bool = False, trainer_capability=None) -> int:
     """Serve the compact Discord-first enhancement/render protocol."""
     from urllib.parse import quote
-    from .discord_welcome import start_gateway_listener
     saved = config.read()
     if not saved.get("token") or not saved.get("deviceId"):
         raise SystemExit("this worker needs the permanent key and device ID supplied by a PeerPixel admin")
-    start_gateway_listener()
     try:
         from websockets.sync.client import connect
     except ImportError:
