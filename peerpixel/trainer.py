@@ -658,7 +658,14 @@ class TrainerCapability:
                     self.client.report_progress(lease, step, total, eta)
                 except Exception:
                     pass
-            report = run_training(lease, train_backend=self.train_backend, progress=progress)
+            if self.train_backend is None:
+                from .training_process import run_training_isolated
+                timeout = max(1.0, lease.expires_at - self.now() - 15.0)
+                report = run_training_isolated(
+                    lease, timeout=timeout, progress=progress)
+            else:
+                report = run_training(
+                    lease, train_backend=self.train_backend, progress=progress)
             response = self.client.upload_candidate(lease, report.artifact_path, report) or {}
             if response.get("promoted") and self.on_promoted is not None:
                 self.on_promoted(report.artifact_path, response)
