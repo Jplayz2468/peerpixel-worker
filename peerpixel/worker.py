@@ -686,6 +686,7 @@ def build_trainer_capability(saved: dict, renderer, *, client=None):
         client or TrainingHttpClient(), device_id=str(saved.get("deviceId") or ""),
         enabled=enabled, active_adapter=active_adapter, staging_root=root,
         on_training_start=release_models, on_promoted=activate,
+        on_parent_selected=lambda candidate: activate(candidate, {}),
     )
 
 
