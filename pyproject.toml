@@ -1,6 +1,6 @@
 [project]
 name = "peerpixel"
-version = "1.15.2"
+version = "1.15.3"
 description = "Render Z-Image-Turbo for people whose machines cannot."
 requires-python = ">=3.11,<3.14"
 dependencies = [

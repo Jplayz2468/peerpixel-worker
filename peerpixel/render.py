@@ -818,8 +818,10 @@ class Renderer:
         if on_phase is not None:
             on_phase("encoding_prompt")
         if hasattr(self.pipe, "encode_prompt"):
-            prompt_embeds, _ = self.pipe.encode_prompt(
-                job["prompt"], do_classifier_free_guidance=False)
+            import torch
+            with torch.inference_mode():
+                prompt_embeds, _ = self.pipe.encode_prompt(
+                    job["prompt"], do_classifier_free_guidance=False)
         if spec["name"] != "bench" and ("style" in job or "recipeId" in job):
             if on_phase is not None:
                 on_phase("loading_style")

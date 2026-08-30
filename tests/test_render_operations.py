@@ -164,6 +164,18 @@ class ProbeTests(unittest.TestCase):
 
 
 class MasterTests(unittest.TestCase):
+    def test_manual_prompt_encoding_runs_without_an_autograd_graph(self):
+        class EncodingPipeline(FakePipeline):
+            def encode_prompt(self, prompt, **_kwargs):
+                import torch
+                self.grad_enabled = torch.is_grad_enabled()
+                return [prompt], []
+
+        pipe = EncodingPipeline()
+        renderer_with(pipe).render({"prompt": "a quiet harbour", "seed": 7,
+                                    "operation": "master"})
+        self.assertFalse(pipe.grad_enabled)
+
     def test_edit_pipeline_shares_components_without_from_pipe_recasting_them(self):
         class Component:
             def to(self, **_kwargs):
