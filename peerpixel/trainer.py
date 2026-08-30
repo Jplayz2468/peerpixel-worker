@@ -196,7 +196,7 @@ def _preference_rows(rows, *, allow_empty: bool) -> list[dict]:
             weight = float(row.get("weight"))
         except (TypeError, ValueError):
             raise TrainingError("snapshot_weight_invalid") from None
-        if weight not in (0.5, 1.0):
+        if not math.isfinite(weight) or weight <= 0:
             raise TrainingError("snapshot_weight_invalid")
         normalized.append({**row, "prompt": row["prompt"].strip(),
                            "chosen": row["chosen"].strip(),
