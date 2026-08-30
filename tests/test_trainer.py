@@ -45,7 +45,7 @@ def snapshot() -> bytes:
       ],
       "replay": [
         {"prompt": "owl", "chosen": "A barn owl above a moonlit field.",
-         "rejected": "An owl.", "weight": 0.5, "eventId": "event-replay"},
+         "rejected": "An owl.", "weight": 0.125, "eventId": "event-replay"},
       ],
     }, sort_keys=True, separators=(",", ":")).encode()
 
