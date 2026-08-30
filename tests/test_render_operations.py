@@ -7,6 +7,7 @@ and the noise its seed names.
 """
 import io
 import unittest
+from unittest import mock
 
 from peerpixel import render
 
@@ -163,6 +164,39 @@ class ProbeTests(unittest.TestCase):
 
 
 class MasterTests(unittest.TestCase):
+    def test_edit_pipeline_shares_components_without_from_pipe_recasting_them(self):
+        class Component:
+            def to(self, **_kwargs):
+                return self
+
+        class Source:
+            scheduler = Component()
+            vae = Component()
+            text_encoder = Component()
+            tokenizer = Component()
+            transformer = Component()
+
+        class EditPipeline:
+            def __init__(self, **components):
+                self.__dict__.update(components)
+
+            @classmethod
+            def from_pipe(cls, _pipe):
+                raise AssertionError("from_pipe recasts the FP8 encoder to float32")
+
+            def set_progress_bar_config(self, **_kwargs):
+                pass
+
+        renderer = render.Renderer.__new__(render.Renderer)
+        renderer.pipe = Source()
+        renderer._device = "cuda"
+        renderer._dtype = __import__("torch").bfloat16
+        renderer._edit_pipe = None
+        with mock.patch("diffusers.ZImageInpaintPipeline", EditPipeline):
+            edit = renderer.edit_pipeline()
+        self.assertIs(edit.transformer, renderer.pipe.transformer)
+        self.assertIs(edit.text_encoder, renderer.pipe.text_encoder)
+
     def test_vary_uses_only_the_generator_named_by_its_seed(self):
         pipe = FakePipeline()
         renderer_with(pipe).render({"prompt": "x", "seed": 7, "operation": "vary",
@@ -194,7 +228,7 @@ class MasterTests(unittest.TestCase):
         self.assertEqual(pipe.calls[0]["generator"].initial_seed(), 7)
         self.assertNotIn("latents", pipe.calls[0])
 
-    def test_refine_uses_the_selected_image_at_low_strength_for_fifty_actual_steps(self):
+    def test_refine_compensates_low_strength_to_keep_nine_actual_steps(self):
         pipe, edit_pipe = FakePipeline(), FakePipeline()
         renderer = renderer_with(pipe)
         renderer.edit_pipeline = lambda: edit_pipe
@@ -206,7 +240,7 @@ class MasterTests(unittest.TestCase):
         call = edit_pipe.calls[0]
         self.assertEqual(call["image"].size, (512, 512))
         self.assertEqual(call["strength"], .20)
-        self.assertEqual(call["num_inference_steps"], 9)
+        self.assertEqual(call["num_inference_steps"], 45)
         self.assertEqual(call["mask_image"].getextrema(), (255, 255))
 
     def test_the_decode_is_announced_so_the_bar_does_not_sit_at_the_last_step(self):

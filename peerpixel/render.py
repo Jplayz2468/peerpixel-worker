@@ -383,8 +383,9 @@ EDIT_STRENGTHS = {
 
 
 def scheduled_edit_steps(actual_steps: int, strength: float) -> int:
-    """Z-Image-Turbo always uses its native scheduler length."""
-    return int(actual_steps)
+    """Compensate img2img truncation to retain the Turbo denoising budget."""
+    import math
+    return max(int(actual_steps), math.ceil(int(actual_steps) / float(strength)))
 
 
 def edit_backend(mode: str) -> str:
@@ -578,7 +579,13 @@ class Renderer:
             raise RuntimeError("editing_requires_cuda")
         if self._edit_pipe is None:
             from diffusers import ZImageInpaintPipeline
-            self._edit_pipe = align_edit_vae(ZImageInpaintPipeline.from_pipe(self.pipe), self._dtype)
+            self._edit_pipe = align_edit_vae(ZImageInpaintPipeline(
+                scheduler=self.pipe.scheduler,
+                vae=self.pipe.vae,
+                text_encoder=self.pipe.text_encoder,
+                tokenizer=self.pipe.tokenizer,
+                transformer=self.pipe.transformer,
+            ), self._dtype)
             self._edit_pipe.set_progress_bar_config(disable=True)
         return self._edit_pipe
 
@@ -856,7 +863,8 @@ class Renderer:
                 image = self.pipe(**pipeline_args).images[0]
             else:
                 pipeline_args.update(image=source, mask_image=mask, strength=editing["strength"],
-                                     num_inference_steps=steps)
+                                     num_inference_steps=scheduled_edit_steps(
+                                         steps, editing["strength"]))
                 image = self.edit_pipeline()(**pipeline_args).images[0]
         else:
             image = self.pipe(**pipeline_args).images[0]

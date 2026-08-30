@@ -34,8 +34,9 @@ class DiscordActionTests(unittest.TestCase):
             render.edit_spec({"editMode": "refine", "editStrength": .76,
                               "sourceImageId": "image-1"})
 
-    def test_refine_keeps_the_native_turbo_schedule(self):
-        self.assertEqual(render.scheduled_edit_steps(9, .42), 9)
+    def test_refine_compensates_strength_to_keep_nine_actual_denoising_steps(self):
+        self.assertEqual(render.scheduled_edit_steps(9, .20), 45)
+        self.assertEqual(render.scheduled_edit_steps(9, .42), 22)
 
     def test_refine_uses_img2img_conditioning_to_preserve_the_selected_composition(self):
         self.assertEqual(render.edit_backend("refine"), "inpaint")
