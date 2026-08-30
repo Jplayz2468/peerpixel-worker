@@ -262,25 +262,24 @@ class MasterTests(unittest.TestCase):
         self.assertEqual(order[-2], ("step", 9), "and only after the final step")
         self.assertEqual(sum(1 for kind, _ in order if kind == "decode"), 1)
 
-    def test_cuda_oom_reloads_once_in_the_guaranteed_low_memory_mode(self):
+    def test_cuda_oom_does_not_reload_the_resident_int8_model(self):
         import torch
 
         renderer = object.__new__(render.Renderer)
         renderer._device = "cuda"
-        renderer._memory_mode = "group"
+        renderer._memory_mode = "resident"
         attempts, fallback = [], []
 
         def attempt(*_args, **_kwargs):
             attempts.append(True)
-            if len(attempts) == 1:
-                raise torch.OutOfMemoryError("CUDA out of memory")
-            return b"jpeg"
+            raise torch.OutOfMemoryError("CUDA out of memory")
 
         renderer._render = attempt
         renderer._retry_low_memory = lambda: fallback.append(True)
-        self.assertEqual(renderer.render({"operation": "master"}), b"jpeg")
-        self.assertEqual(len(attempts), 2)
-        self.assertEqual(fallback, [True])
+        with self.assertRaises(torch.OutOfMemoryError):
+            renderer.render({"operation": "master"})
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(fallback, [])
 
 
 class TurboConditioningTests(unittest.TestCase):

@@ -557,3 +557,9 @@ class PromptEnhancer:
         # unified-memory Macs, where CPU and MPS allocations share one pool.
         import gc
         gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001 - cleanup is best effort
+            pass

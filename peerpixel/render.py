@@ -790,7 +790,8 @@ class Renderer:
             return self._render(job, on_step=on_step, on_decode=on_decode,
                                 on_phase=on_phase)
         except RuntimeError as error:
-            if self._device != "cuda" or self._memory_mode == "sequential" or not _cuda_oom(error):
+            if (self._device != "cuda" or self._memory_mode != "group"
+                    or not _cuda_oom(error)):
                 raise
             if on_demote is not None:
                 on_demote("low-memory CUDA")

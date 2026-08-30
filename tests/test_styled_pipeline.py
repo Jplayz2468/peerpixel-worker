@@ -17,6 +17,17 @@ from peerpixel.render import Renderer, STYLE_RECIPES
 
 
 class StyledPipelineTests(unittest.TestCase):
+    def test_unload_releases_cuda_cache_before_the_image_model_loads(self):
+        enhancer = PromptEnhancer()
+        enhancer.model = object()
+        enhancer.tokenizer = object()
+        with (mock.patch("torch.cuda.is_available", return_value=True),
+              mock.patch("torch.cuda.empty_cache") as empty_cache):
+            enhancer.unload()
+        self.assertIsNone(enhancer.model)
+        self.assertIsNone(enhancer.tokenizer)
+        empty_cache.assert_called_once_with()
+
     def test_bootstrap_adapter_uses_the_plain_training_template(self):
         self.assertEqual(bootstrap_messages("  fox  "), [
             {"role": "user", "content": "fox"},
