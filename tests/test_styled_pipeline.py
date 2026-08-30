@@ -521,5 +521,5 @@ class StyledPipelineTests(unittest.TestCase):
                            "negativePrompt", "negativeConditioning")}, {
             "precision": "int8", "memoryMode": "resident",
             "styleMode": "prompt_only", "negativePrompt": "watermark, blur",
-            "negativeConditioning": "native",
+            "negativeConditioning": "none",
         })

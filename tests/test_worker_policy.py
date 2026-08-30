@@ -28,7 +28,7 @@ class StepTimingTests(unittest.TestCase):
 
     def test_a_machine_that_has_never_rendered_falls_back_to_its_benchmark(self):
         # Which is the one timed render every worker has already done.
-        self.assertAlmostEqual(worker.seconds_per_step("master"), 2.0)
+        self.assertAlmostEqual(worker.seconds_per_step("master"), 8 / 9)
 
     def test_one_finished_render_is_taken_whole(self):
         worker.remember_step("master", 300.0, 50)

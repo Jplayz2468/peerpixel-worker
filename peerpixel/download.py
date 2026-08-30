@@ -19,6 +19,7 @@ import threading
 from pathlib import Path
 
 from .render import MODEL, REVISION
+from .z_image import QUANT_MODEL, QUANT_REVISION, TEXT_ENCODER_FILE, TRANSFORMER_FILE
 from .console import human
 from .weights import repo_dir as _repo_dir_of
 
@@ -57,6 +58,8 @@ def _plan() -> tuple[list[str], int, str]:
     chosen = [
         f for f in info.siblings
         if any(fnmatch.fnmatch(f.rfilename, pattern) for pattern in wanted)
+        and not (f.rfilename.startswith(("transformer/", "text_encoder/"))
+                 and f.rfilename.endswith((".safetensors", ".bin", ".pt")))
     ]
     return [f.rfilename for f in chosen], sum(f.size or 0 for f in chosen), info.sha
 
@@ -89,10 +92,7 @@ def ensure(on_phase=None, on_progress=None) -> str:
     """
     phase = on_phase or (lambda *a, **k: None)
     report = on_progress or (lambda *a, **k: None)
-    if os.path.isdir(MODEL):
-        return MODEL  # PEERPIXEL_MODEL points at a local copy
-
-    from huggingface_hub import snapshot_download
+    from huggingface_hub import hf_hub_download, snapshot_download
     from huggingface_hub.utils import disable_progress_bars
 
     disable_progress_bars()  # its per-file bars would fight with the one bar
@@ -115,7 +115,10 @@ def ensure(on_phase=None, on_progress=None) -> str:
     # run announce a download it is not going to do.
     if all((snapshot / name).is_file() for name in files):
         phase("check")
-        return str(snapshot)
+        path = str(snapshot)
+        for filename in (TRANSFORMER_FILE, TEXT_ENCODER_FILE):
+            hf_hub_download(QUANT_MODEL, filename, revision=QUANT_REVISION)
+        return path
 
     done = _measure(root, sha, files)
     phase("fetch", detail=f"{human(max(total - done, 0))} to fetch")
@@ -142,4 +145,6 @@ def ensure(on_phase=None, on_progress=None) -> str:
     if "error" in outcome:
         raise outcome["error"]
     phase("check")
+    for filename in (TRANSFORMER_FILE, TEXT_ENCODER_FILE):
+        hf_hub_download(QUANT_MODEL, filename, revision=QUANT_REVISION)
     return outcome["path"]

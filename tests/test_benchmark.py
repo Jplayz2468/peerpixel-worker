@@ -44,12 +44,12 @@ class BenchmarkTests(unittest.TestCase):
                     100_000, 20_000, valid=validity, quality_passed=True,
                 )["qualified"])
     def test_short_sample_predicts_full_master_and_warns_without_rejecting(self):
-        self.assertEqual(estimated_master_ms(4_000), 200_000)
-        self.assertFalse(likely_generation_work(4_000))
-        self.assertEqual(estimated_master_ms(8_000), 400_000)
-        self.assertFalse(likely_generation_work(8_000))
-        warning = generation_warning(8_000, "Apple silicon MLX q4")
-        self.assertIn("few image jobs", warning)
+        self.assertEqual(estimated_master_ms(4_000), 16_000)
+        self.assertTrue(likely_generation_work(4_000))
+        self.assertEqual(estimated_master_ms(8_000), 32_000)
+        self.assertTrue(likely_generation_work(8_000))
+        warning = generation_warning(20_000, "slow GPU")
+        self.assertIn("few generation credits", warning)
         self.assertIn("probes and verification", warning)
         self.assertNotIn("upscal", warning.lower())
 

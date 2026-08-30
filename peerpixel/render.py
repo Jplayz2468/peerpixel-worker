@@ -1,20 +1,4 @@
-"""Rendering.
-
-FLUX.2 Klein run the way it was meant to run: diffusers on PyTorch, using
-whatever accelerator this machine has. CUDA on most Windows and Linux boxes,
-MPS on Apple silicon, CPU as a last resort.
-
-This is the **base** checkpoint, not the step-distilled one, and that choice is
-the reason everything here is slower than it used to be. Distilled Klein
-renders in four steps and is several times faster, but it ignores guidance
-completely -- the pipeline disables classifier-free guidance outright when the
-checkpoint reports `is_distilled` -- and compared side by side on the same
-prompts it drifted on spatial instructions and on negative ones, and turned
-backgrounds into featureless blur. Fifty guided steps is worth the wait.
-
-Guidance costs double on top of the step count: a guided step runs the
-transformer twice, once for the prompt and once for an empty one, and mixes
-them. Fifty steps is a hundred forward passes.
+"""Z-Image-Turbo rendering on CUDA.
 
 A public **master** is one native, roughly one-megapixel render at the full
 fifty guided steps, from a prompt and seed. Its dimensions come from five exact
@@ -41,17 +25,16 @@ import xml.etree.ElementTree as ET
 
 from . import config
 
-MODEL = os.environ.get("PEERPIXEL_MODEL", "black-forest-labs/FLUX.2-klein-base-4B")
+from .z_image import BASE_MODEL, BASE_REVISION, GUIDANCE, SCHEDULER_STEPS
+
+MODEL = BASE_MODEL
 
 #: Pinned, because an unpinned repo means two machines that downloaded on
 #: different days are running different weights. That is invisible until it is
 #: not: the network re-renders a fraction of jobs on a machine the operator owns
 #: and compares them, and honest machines disagreeing about weights looks
 #: exactly like fraud. Override only if you know why you are doing it.
-REVISION = os.environ.get("PEERPIXEL_MODEL_REVISION", "a3b4f4849157f664bdbc776fd7453c2783562f4d")
-if os.environ.get("PEERPIXEL_MODEL") and not os.environ.get("PEERPIXEL_MODEL_REVISION"):
-    # A custom model with the stock revision pin would fail to resolve.
-    REVISION = None
+REVISION = BASE_REVISION
 
 #: Everything the network sends. The worker refuses anything else rather than
 #: guessing, because guessing wrong means charging for the wrong picture. These
@@ -63,25 +46,18 @@ if os.environ.get("PEERPIXEL_MODEL") and not os.environ.get("PEERPIXEL_MODEL_REV
 #: quality knob that does not change the amount of work -- so it is taken from
 #: the payload when one is given, and can be retuned on the server without every
 #: machine on the network needing an update.
-GUIDANCE = 4.0
-
-#: A guidance scale outside this is not a tuning choice, it is a mistake or a
-#: corrupted payload, and it would waste a real render. At or below 1.0 the
-#: pipeline turns guidance off entirely, which is the distilled behaviour this
-#: checkpoint was chosen to get away from.
-GUIDANCE_RANGE = (1.5, 12.0)
 OPERATIONS = {
-    "grid": {"width": 512, "height": 512, "steps": 16, "guidance": GUIDANCE},
-    "vary": {"width": 512, "height": 512, "steps": 16, "guidance": GUIDANCE},
-    "refine": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
+    "grid": {"width": 512, "height": 512, "steps": SCHEDULER_STEPS, "guidance": GUIDANCE},
+    "vary": {"width": 512, "height": 512, "steps": SCHEDULER_STEPS, "guidance": GUIDANCE},
+    "refine": {"width": 1024, "height": 1024, "steps": SCHEDULER_STEPS, "guidance": GUIDANCE},
     # Public generation is one native full-size render.
-    "master": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
+    "master": {"width": 1024, "height": 1024, "steps": SCHEDULER_STEPS, "guidance": GUIDANCE},
     # A check is a master rendered a second time on a machine the operator
     # owns, so it is the same work with the same inputs. Only what happens to
     # the result differs: it is compared rather than delivered.
-    "verify": {"width": 1024, "height": 1024, "steps": 50, "guidance": GUIDANCE},
+    "verify": {"width": 1024, "height": 1024, "steps": SCHEDULER_STEPS, "guidance": GUIDANCE},
     # Fraud checks are internal work with an explicit cheap spatial contract.
-    "probe": {"width": 128, "height": 128, "steps": 50, "guidance": GUIDANCE},
+    "probe": {"width": 128, "height": 128, "steps": SCHEDULER_STEPS, "guidance": GUIDANCE},
     # The admission test, and the only operation the network never sends. It is
     # master resolution -- that is what catches a card which cannot hold a real
     # render -- at a step count chosen to be timed rather than looked at.
@@ -92,7 +68,7 @@ OPERATIONS = {
     # the benchmark too, so a test written to run four steps ran fifty, took
     # twelve times as long as it was meant to, and was then judged against a
     # limit written for four.
-    "bench": {"width": 512, "height": 512, "steps": 4, "guidance": GUIDANCE},
+    "bench": {"width": 512, "height": 512, "steps": SCHEDULER_STEPS, "guidance": GUIDANCE},
 }
 
 #: The coordinator prices only these near-one-megapixel canvases. A worker may
@@ -369,11 +345,11 @@ def operation_of(job: dict) -> dict:
         width = int(job.get("width", spec["width"]))
         height = int(job.get("height", spec["height"]))
         steps = int(job.get("steps", spec["steps"]))
-        max_side, max_pixels, min_side, step_range = ((1024, 1024 * 1024, 256, (20, 60))
-            if name == "refine" else (512, 512 * 512, 256, (8, 32)))
+        max_side, max_pixels, min_side = ((1024, 1024 * 1024, 256)
+            if name == "refine" else (512, 512 * 512, 256))
         if (width % 8 or height % 8 or min(width, height) < min_side
                 or max(width, height) > max_side or width * height > max_pixels
-                or not step_range[0] <= steps <= step_range[1]):
+                or steps != SCHEDULER_STEPS):
             raise ValueError("untrusted_generation_spec")
     elif name in ("master", "verify"):
         width = int(job.get("width", spec["width"]))
@@ -391,20 +367,10 @@ def operation_of(job: dict) -> dict:
     if name in ("master", "verify"):
         steps = spec["steps"]
 
-    guidance = spec["guidance"]
-    asked = job.get("guidance")
-    if asked is not None:
-        try:
-            asked = float(asked)
-        except (TypeError, ValueError):
-            asked = None
-        low, high = GUIDANCE_RANGE
-        if asked is not None and low <= asked <= high:
-            guidance = asked
     if job.get("editMode") and name not in ("master", "vary", "refine"):
         raise ValueError("editing_not_allowed")
     return {"name": name, **spec, "width": width, "height": height,
-            "steps": steps, "guidance": guidance}
+            "steps": steps, "guidance": spec["guidance"]}
 
 
 EDIT_STRENGTHS = {
@@ -417,9 +383,8 @@ EDIT_STRENGTHS = {
 
 
 def scheduled_edit_steps(actual_steps: int, strength: float) -> int:
-    """Compensate for img2img strength truncation so requested steps are real."""
-    import math
-    return max(int(actual_steps), int(math.ceil(int(actual_steps) / float(strength))))
+    """Z-Image-Turbo always uses its native scheduler length."""
+    return int(actual_steps)
 
 
 def edit_backend(mode: str) -> str:
@@ -521,7 +486,8 @@ def seeded_generator(seed: int):
     """
     import torch
 
-    return torch.Generator("cpu").manual_seed(int(seed))
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    return torch.Generator(device).manual_seed(int(seed))
 
 
 class _Nonsense(Exception):
@@ -598,10 +564,6 @@ class Renderer:
         self._safety = None
         self._device, self._dtype, self.accelerator, self._total = pick_device()
         self._mlx_backend = None
-        if self._device == "mps":
-            from .mlx_backend import MLXBackend
-            self._mlx_backend = MLXBackend()
-            self.accelerator = self.accelerator.replace("Apple silicon", "Apple silicon MLX q4")
         self._memory_mode = None
         self._forced_memory_mode = None
         self._precision_mode = "native"
@@ -615,8 +577,8 @@ class Renderer:
         if not self.supports_editing:
             raise RuntimeError("editing_requires_cuda")
         if self._edit_pipe is None:
-            from diffusers import Flux2KleinInpaintPipeline
-            self._edit_pipe = align_edit_vae(Flux2KleinInpaintPipeline.from_pipe(self.pipe), self._dtype)
+            from diffusers import ZImageInpaintPipeline
+            self._edit_pipe = align_edit_vae(ZImageInpaintPipeline.from_pipe(self.pipe), self._dtype)
             self._edit_pipe.set_progress_bar_config(disable=True)
         return self._edit_pipe
 
@@ -624,19 +586,12 @@ class Renderer:
         """Load once and keep it. A 4B model takes tens of seconds to load."""
         if self.pipe is not None:
             return
-        if getattr(self, "_mlx_backend", None) is not None:
-            started = time.time()
-            self._mlx_backend.ensure_model()
-            self.pipe = self._mlx_backend
-            self._precision_mode = "mlx-q4"
-            self._memory_mode = "resident"
-            self.load_seconds = time.time() - started
-            return
         import torch  # noqa: F401
-        from diffusers import Flux2KleinPipeline
 
         device, dtype, label, total = pick_device()
         self._device, self._dtype, self.accelerator = device, dtype, label
+        if device != "cuda":
+            raise RuntimeError("image_rendering_requires_cuda")
         free = 0
         if device == "cuda":
             free, current_total = nvidia_memory()
@@ -644,29 +599,9 @@ class Renderer:
             require_cuda_headroom(free, total)
         _quieten()
         started = time.time()
-        from .precision import pipeline_quantization_config, runtime_probe, select_precision
-
-        requested_precision = os.environ.get("PEERPIXEL_DTYPE") or config.read().get("dtype")
-        plan = select_precision(runtime_probe(total=total, free=free), requested_precision) if device == "cuda" else None
-        self._precision_mode = plan.mode if plan is not None else str(dtype).split(".")[-1]
-        if plan is not None and plan.mode == "unavailable":
-            raise RuntimeError(plan.reason)
-
-        # `dtype`, not `torch_dtype`: the old spelling is deprecated and prints
-        # a warning across whatever is being drawn at the time.
-        load_options = {"revision": REVISION, "dtype": dtype}
-        if plan is not None and plan.mode in {"int8", "int4"}:
-            load_options.update(
-                quantization_config=pipeline_quantization_config(plan.mode),
-                device_map="cuda",
-            )
-        try:
-            pipe = Flux2KleinPipeline.from_pretrained(MODEL, **load_options)
-        except Exception:
-            # A worker must never silently produce a different-quality image.
-            # Quantization failures make image rendering unavailable while the
-            # machine can continue serving its auxiliary model capabilities.
-            raise
+        from .z_image import load_pipeline
+        self._precision_mode = "int8"
+        pipe = load_pipeline(device=device, dtype=dtype)
 
         # Under roughly 24 GB the transformer and the text encoder cannot both
         # sit on the accelerator. Handing them over a layer at a time is slower
@@ -675,29 +610,7 @@ class Renderer:
         # An unknown size counts as small. If the card would not say how much
         # memory it has, something is already using it, and putting the whole
         # model on it is the way to turn that into an out-of-memory crash.
-        if device == "cuda":
-            mode = self._forced_memory_mode or (
-                "resident" if plan is not None and plan.resident
-                else cuda_memory_mode(total=total, free=free))
-            if mode == "sequential":
-                pipe.enable_sequential_cpu_offload()
-            elif mode == "group":
-                # One block per group keeps even 12GB cards below their limit.
-                # A separate CUDA stream overlaps the next transfer with the
-                # current block's compute, avoiding sequential-offload speed.
-                group_options = cuda_group_options(total=total, free=free)
-                pipe.enable_group_offload(
-                    onload_device=torch.device("cuda"),
-                    offload_device=torch.device("cpu"),
-                    offload_type="block_level",
-                    **group_options,
-                )
-            elif plan is None or plan.mode not in {"int8", "int4"}:
-                pipe.to(device)
-            self._memory_mode = mode
-        else:
-            pipe.to(device)
-            self._memory_mode = "resident"
+        self._memory_mode = "resident"
         pipe.set_progress_bar_config(disable=True)
 
         # Decoding is one unbounded call over the whole picture, and at 1024px
@@ -764,9 +677,7 @@ class Renderer:
         # Enhancement is complete before inference. Do not retain Qwen's
         # tensors while the much larger FLUX pipeline and VAE need the memory.
         self._enhancer.unload()
-        negative_mode = ("none" if not negative else
-                         "inline" if getattr(self, "_mlx_backend", None) is not None
-                         else "native")
+        negative_mode = "none"
         resolved = {**job, "prompt": effective, "negativePrompt": negative,
                     "style": chosen_style,
                     "recipeId": STYLE_RECIPES[chosen_style][0]}
@@ -895,34 +806,12 @@ class Renderer:
     def _render(self, job: dict, on_step=None, on_decode=None, on_phase=None) -> bytes:
         self.warm()
         spec = operation_of(job)
-        if getattr(self, "_mlx_backend", None) is not None:
-            if on_phase is not None:
-                on_phase("encoding_prompt")
-            if spec["name"] != "bench" and ("style" in job or "recipeId" in job):
-                if on_phase is not None:
-                    on_phase("loading_style")
-                self._style_mode = self.apply_style(job)
-            if on_phase is not None:
-                on_phase("rendering")
-            jpeg = self._mlx_backend.render(
-                prompt=job["prompt"], width=spec["width"], height=spec["height"],
-                steps=spec["steps"], guidance=spec["guidance"],
-                seed=job.get("seed", 0), negative_prompt=job.get("negativePrompt", ""),
-                on_step=on_step,
-            )
-            if on_phase is not None:
-                on_phase("decoding")
-            if on_decode is not None:
-                on_decode()
-            return jpeg
-        prompt_embeds = negative_prompt_embeds = None
+        prompt_embeds = None
         if on_phase is not None:
             on_phase("encoding_prompt")
         if hasattr(self.pipe, "encode_prompt"):
-            prompt_embeds, _ = self.pipe.encode_prompt(job["prompt"])
-            if spec["guidance"] > 1:
-                negative_prompt_embeds, _ = self.pipe.encode_prompt(
-                    job.get("negativePrompt", ""))
+            prompt_embeds, _ = self.pipe.encode_prompt(
+                job["prompt"], do_classifier_free_guidance=False)
         if spec["name"] != "bench" and ("style" in job or "recipeId" in job):
             if on_phase is not None:
                 on_phase("loading_style")
@@ -943,7 +832,6 @@ class Renderer:
         pipeline_args = dict(
             prompt=None if prompt_embeds is not None else job["prompt"],
             prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
             num_inference_steps=steps,
             # Real classifier-free guidance, which the pipeline enables only
             # because this checkpoint is not distilled. The negative side is an
@@ -968,32 +856,9 @@ class Renderer:
                 image = self.pipe(**pipeline_args).images[0]
             else:
                 pipeline_args.update(image=source, mask_image=mask, strength=editing["strength"],
-                                     num_inference_steps=scheduled_edit_steps(
-                                         steps, editing["strength"]))
+                                     num_inference_steps=steps)
                 image = self.edit_pipeline()(**pipeline_args).images[0]
         else:
-            # Ordinary generation starts from portable CPU-seeded noise.
-            latents = seeded_latents(self.pipe, spec, job.get("seed", 0), self._dtype)
-            if job.get("noiseBlendSeed") is not None:
-                try:
-                    amount = max(.05, min(.8, float(job.get("noiseBlendStrength", .35))))
-                except (TypeError, ValueError):
-                    amount = .35
-                base_width = int(job.get("noiseBaseWidth", spec["width"]))
-                base_height = int(job.get("noiseBaseHeight", spec["height"]))
-                if (base_width, base_height) != (spec["width"], spec["height"]):
-                    import torch.nn.functional as functional
-                    base_spec = {**spec, "width": base_width, "height": base_height}
-                    latents = seeded_latents(self.pipe, base_spec, job.get("seed", 0), self._dtype)
-                    latents = functional.interpolate(latents, size=(latent_grid(self.pipe, spec["height"]),
-                        latent_grid(self.pipe, spec["width"])), mode="bilinear", align_corners=False)
-                    latents = latents / latents.float().std().clamp_min(1e-6).to(latents.dtype)
-                fresh = seeded_latents(self.pipe, spec, job["noiseBlendSeed"], self._dtype)
-                # Keep unit variance while interpolating the original and fresh noise fields.
-                latents = ((1 - amount) * latents + amount * fresh) / (((1 - amount) ** 2 + amount ** 2) ** .5)
-            pipeline_args["latents"] = latents
-            if prompt_embeds is None:
-                pipeline_args["negative_prompt"] = job.get("negativePrompt", "")
             image = self.pipe(**pipeline_args).images[0]
 
         if watch.broken:

@@ -14,7 +14,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-MODEL = os.environ.get("PEERPIXEL_MODEL", "black-forest-labs/FLUX.2-klein-base-4B")
+MODEL = "Tongyi-MAI/Z-Image-Turbo"
+QUANT_MODEL = "unsloth/Z-Image-Turbo-FP8"
+QUANT_FILES = ("Z-Image-Turbo-INT8.pt", "Z-Image-Turbo-text_encoder-FP8.pt")
 
 
 def cache_root() -> Path:
@@ -45,6 +47,8 @@ def cached(model: str = "") -> bool:
     if os.path.isdir(name):
         return True  # PEERPIXEL_MODEL points at a local copy
     try:
-        return any((repo_dir(name) / "snapshots").glob("*/model_index.json"))
+        base = any((repo_dir(name) / "snapshots").glob("*/model_index.json"))
+        quant = repo_dir(QUANT_MODEL) / "snapshots"
+        return base and all(any(quant.glob(f"*/{filename}")) for filename in QUANT_FILES)
     except OSError:
         return False

@@ -45,7 +45,7 @@ class PerRowTemperature:
                              dtype=scores.dtype).unsqueeze(1)
         return scores / scale
 
-SYSTEM_INSTRUCTION = """You are an expert prompt optimizer for FLUX image models.
+SYSTEM_INSTRUCTION = """You are an expert prompt optimizer for Z-Image-Turbo.
 Output ONLY one valid compact JSON object with exactly two string fields: "prompt" and "negative_prompt". No markdown, preamble, or additional keys. Write the prompt as 1–2 dense sentences of concrete image-model instructions. Write negative_prompt as a concise comma-separated list of concrete visual defects or unwanted elements specifically relevant to this image; never negate requested subjects or visible text.
 
 Behavior:
@@ -56,7 +56,7 @@ Behavior:
 - Do not use similes, poetic comparisons, figurative language, or phrases such as "captures," "evokes," "symbolizes," "shimmers like," or "a sense of." State only what can be seen.
 - Prefer dense, useful image-model tokens over prose. Name observable geometry, placement, materials, colors, light, camera or medium, and production technique. Describe the image itself; do not review, interpret, or praise it.
 - Preserve explicit constraints and subject count. Do not add extra people, text, logos, brands, or named characters unless requested, and never contradict specified traits.
-- When visible text is explicitly requested on a sign, poster, cover, label, screen, garment, title, caption, or similar surface: reproduce its exact spelling and capitalization in double quotes. Describe the physical surface plus typography, placement, material, contrast, and legibility so FLUX treats the words as part of the composition. Never paraphrase, translate, extend, or invent copy. Spoken dialogue is not visible image text unless the user requests a speech bubble, subtitle, or caption.
+- When visible text is explicitly requested on a sign, poster, cover, label, screen, garment, title, caption, or similar surface: reproduce its exact spelling and capitalization in double quotes. Describe the physical surface plus typography, placement, material, contrast, and legibility. Never paraphrase, translate, extend, or invent copy. Spoken dialogue is not visible image text unless the user requests a speech bubble, subtitle, or caption.
 - Develop the scene concept before applying the one required style supplied with the request. Never borrow characteristics from a different style."""
 
 AUTO_SYSTEM_INSTRUCTION = SYSTEM_INSTRUCTION.replace(
@@ -202,7 +202,7 @@ def _visible_items(values) -> tuple[VisibleText, ...]:
 
 
 def enforce_visible_text(prompt: str, requested) -> str:
-    """Front-load exact FLUX typography clauses after any model enhancement."""
+    """Front-load exact typography clauses after any model enhancement."""
     items = _visible_items(requested)
     if not items:
         return str(prompt or "").strip()

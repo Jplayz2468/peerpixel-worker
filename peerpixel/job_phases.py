@@ -7,7 +7,7 @@ from . import config
 
 
 PHASES = (
-    "preparing", "loading_flux", "enhancing_prompt", "encoding_prompt",
+    "preparing", "loading_model", "enhancing_prompt", "encoding_prompt",
     "loading_style", "rendering", "decoding", "safety_check",
     "delivering", "complete",
 )

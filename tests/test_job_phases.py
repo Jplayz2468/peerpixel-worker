@@ -7,7 +7,7 @@ from peerpixel.job_phases import PhaseReporter, remember_phase, valid_phase_sequ
 class PhaseReporterTests(unittest.TestCase):
     def test_the_generation_phase_order_is_valid(self):
         self.assertTrue(valid_phase_sequence([
-            "preparing", "loading_flux", "enhancing_prompt", "encoding_prompt",
+            "preparing", "loading_model", "enhancing_prompt", "encoding_prompt",
             "loading_style", "rendering", "decoding", "safety_check",
             "delivering", "complete",
         ]))

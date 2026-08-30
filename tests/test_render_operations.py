@@ -84,10 +84,10 @@ class OperationTableTests(unittest.TestCase):
     def test_public_master_and_internal_probe_have_their_pinned_contracts(self):
         self.assertEqual(
             render.operation_of({"operation": "master"}),
-            {"name": "master", "width": 1024, "height": 1024, "steps": 50, "guidance": 4.0})
+            {"name": "master", "width": 1024, "height": 1024, "steps": 9, "guidance": 0.0})
         self.assertEqual(
             render.operation_of({"operation": "probe"}),
-            {"name": "probe", "width": 128, "height": 128, "steps": 50, "guidance": 4.0})
+            {"name": "probe", "width": 128, "height": 128, "steps": 9, "guidance": 0.0})
 
     def test_a_check_is_exactly_a_master(self):
         master = dict(render.operation_of({"operation": "master"}), name="check")
@@ -116,16 +116,16 @@ class OperationTableTests(unittest.TestCase):
                 })
                 self.assertEqual((spec["width"], spec["height"]), (width, height))
 
-    def test_refine_accepts_each_512px_upscale_aspect_at_fifty_steps(self):
+    def test_refine_accepts_each_512px_upscale_aspect_at_nine_steps(self):
         for width, height in (
             (512, 512), (512, 384), (384, 512), (512, 288), (288, 512),
         ):
             with self.subTest(width=width, height=height):
                 spec = render.operation_of({
-                    "operation": "refine", "width": width, "height": height, "steps": 50,
+                    "operation": "refine", "width": width, "height": height, "steps": 9,
                 })
                 self.assertEqual((spec["width"], spec["height"], spec["steps"]),
-                                 (width, height, 50))
+                                 (width, height, 9))
 
     def test_a_master_still_refuses_an_arbitrary_near_megapixel_shape(self):
         with self.assertRaises(ValueError):
@@ -136,7 +136,7 @@ class OperationTableTests(unittest.TestCase):
 
 
 class ProbeTests(unittest.TestCase):
-    def test_a_probe_is_128px_at_fifty_steps_from_the_prompt_alone(self):
+    def test_a_probe_is_128px_at_nine_steps_from_the_prompt_alone(self):
         pipe = FakePipeline()
         jpeg = renderer_with(pipe).render(
             {"prompt": "a quiet harbour", "seed": 7, "operation": "probe"})
@@ -144,40 +144,11 @@ class ProbeTests(unittest.TestCase):
         (call,) = pipe.calls
         self.assertEqual(call["width"], 128)
         self.assertEqual(call["height"], 128)
-        self.assertEqual(call["num_inference_steps"], 50)
-        self.assertEqual(call["guidance_scale"], 4.0)
+        self.assertEqual(call["num_inference_steps"], 9)
+        self.assertEqual(call["guidance_scale"], 0.0)
         self.assertNotIn("image", call, "a probe is a complete prompt-and-seed render")
         self.assertEqual(call["generator"].initial_seed(), 7)
         self.assertTrue(jpeg.startswith(b"\xff\xd8\xff"))
-
-    def test_apple_silicon_renderer_preserves_the_network_contract_through_mlx(self):
-        class Backend:
-            def render(self, **kwargs):
-                self.kwargs = kwargs
-                kwargs["on_step"](50, 50)
-                return a_jpeg((512, 512))
-
-        backend = Backend()
-        renderer = render.Renderer.__new__(render.Renderer)
-        renderer._mlx_backend = backend
-        renderer._device = "mps"
-        renderer._style_mode = "prompt_only"
-        renderer.warm = lambda: None
-        renderer.apply_style = lambda _job: "prompt_only"
-        steps = []
-        jpeg = renderer._render({
-            "prompt": "a quiet harbour", "negativePrompt": "watermark, blur",
-            "seed": 7, "operation": "master",
-            "style": "photoreal", "recipeId": "photoreal-v2",
-            "manifestVersion": render.MANIFEST_VERSION,
-        }, on_step=lambda done, total: steps.append((done, total)))
-        self.assertTrue(jpeg.startswith(b"\xff\xd8\xff"))
-        self.assertEqual(backend.kwargs["width"], 1024)
-        self.assertEqual(backend.kwargs["steps"], 50)
-        self.assertEqual(backend.kwargs["guidance"], 4.0)
-        self.assertEqual(backend.kwargs["seed"], 7)
-        self.assertEqual(backend.kwargs["negative_prompt"], "watermark, blur")
-        self.assertEqual(steps, [(50, 50)])
 
     def test_a_probe_reports_every_step_it_runs(self):
         # Read from the table rather than written out, because the point of
@@ -192,16 +163,16 @@ class ProbeTests(unittest.TestCase):
 
 
 class MasterTests(unittest.TestCase):
-    def test_noise_blend_starts_between_original_and_fresh_seed_without_an_image(self):
+    def test_vary_uses_only_the_generator_named_by_its_seed(self):
         pipe = FakePipeline()
         renderer_with(pipe).render({"prompt": "x", "seed": 7, "operation": "vary",
             "noiseBlendSeed": 19, "noiseBlendStrength": .35})
         call = pipe.calls[0]
-        self.assertIn("latents", call)
+        self.assertNotIn("latents", call)
         self.assertNotIn("image", call)
         self.assertNotIn("strength", call)
 
-    def test_a_final_is_1024px_at_fifty_guided_steps_from_prompt_and_seed(self):
+    def test_a_final_is_1024px_at_nine_turbo_steps_from_prompt_and_seed(self):
         pipe = FakePipeline()
         renderer_with(pipe).render(
             {"prompt": "a quiet harbour", "seed": 7, "operation": "master"})
@@ -209,7 +180,7 @@ class MasterTests(unittest.TestCase):
         (call,) = pipe.calls
         self.assertEqual(call["width"], 1024)
         self.assertEqual(call["height"], 1024)
-        self.assertEqual(call["num_inference_steps"], 50)
+        self.assertEqual(call["num_inference_steps"], 9)
         self.assertEqual(call["generator"].initial_seed(), 7)
         # Not img2img and not reference conditioning. A final is a native
         # render at its own resolution with nothing else in its context, which
@@ -217,11 +188,11 @@ class MasterTests(unittest.TestCase):
         for absent in ("image", "strength", "mask_image"):
             self.assertNotIn(absent, call)
 
-    def test_a_final_starts_from_the_noise_its_seed_names(self):
+    def test_a_final_passes_the_seeded_generator_to_the_pipeline(self):
         pipe = FakePipeline()
         renderer_with(pipe).render({"prompt": "x", "seed": 7, "operation": "master"})
-        latents = pipe.calls[0]["latents"]
-        self.assertEqual(tuple(latents.shape), (1, 128, 64, 64))
+        self.assertEqual(pipe.calls[0]["generator"].initial_seed(), 7)
+        self.assertNotIn("latents", pipe.calls[0])
 
     def test_refine_uses_the_selected_image_at_low_strength_for_fifty_actual_steps(self):
         pipe, edit_pipe = FakePipeline(), FakePipeline()
@@ -230,12 +201,12 @@ class MasterTests(unittest.TestCase):
         source = a_jpeg((512, 512))
         renderer.render({"prompt": "a quiet harbour", "seed": 7,
             "operation": "refine", "width": 512, "height": 512,
-            "steps": 50, "editMode": "refine", "editStrength": .20,
+            "steps": 9, "editMode": "refine", "editStrength": .20,
             "sourceImageId": "source", "_editSource": source})
         call = edit_pipe.calls[0]
         self.assertEqual(call["image"].size, (512, 512))
         self.assertEqual(call["strength"], .20)
-        self.assertEqual(call["num_inference_steps"], 250)
+        self.assertEqual(call["num_inference_steps"], 9)
         self.assertEqual(call["mask_image"].getextrema(), (255, 255))
 
     def test_the_decode_is_announced_so_the_bar_does_not_sit_at_the_last_step(self):
@@ -254,7 +225,7 @@ class MasterTests(unittest.TestCase):
             on_decode=lambda: order.append(("decode", None)))
 
         self.assertEqual(order[-1], ("decode", None), "decoding is announced last")
-        self.assertEqual(order[-2], ("step", 50), "and only after the final step")
+        self.assertEqual(order[-2], ("step", 9), "and only after the final step")
         self.assertEqual(sum(1 for kind, _ in order if kind == "decode"), 1)
 
     def test_cuda_oom_reloads_once_in_the_guaranteed_low_memory_mode(self):
@@ -278,41 +249,32 @@ class MasterTests(unittest.TestCase):
         self.assertEqual(fallback, [True])
 
 
-class GuidanceTests(unittest.TestCase):
-    """The whole point of the base checkpoint.
+class TurboConditioningTests(unittest.TestCase):
 
-    The pipeline turns classifier-free guidance on only when the checkpoint is
-    not distilled, and then runs a second pass per step against an empty prompt.
-    Passing a scale the checkpoint ignores is how the distilled model quietly
-    disregarded every spatial and negative instruction it was given.
-    """
-
-    def test_every_operation_is_guided(self):
+    def test_every_operation_uses_turbo_guidance(self):
         for operation in ("master", "verify", "probe"):
             with self.subTest(operation=operation):
-                self.assertEqual(render.operation_of({"operation": operation})["guidance"], 4.0)
+                self.assertEqual(render.operation_of({"operation": operation})["guidance"], 0.0)
 
     def test_the_scale_reaches_the_pipeline(self):
         for operation in ("master", "probe"):
             pipe = FakePipeline()
             renderer_with(pipe).render({"prompt": "x", "seed": 1, "operation": operation})
-            self.assertEqual(pipe.calls[0]["guidance_scale"], 4.0)
+            self.assertEqual(pipe.calls[0]["guidance_scale"], 0.0)
 
-    def test_diffusers_receives_the_generated_negative_prompt(self):
+    def test_turbo_does_not_receive_a_negative_prompt(self):
         pipe = FakePipeline()
         renderer_with(pipe).render({
             "prompt": "a fox", "negativePrompt": "watermark, duplicate animals",
             "seed": 1, "operation": "master",
         })
-        self.assertEqual(pipe.calls[0]["negative_prompt"],
-                         "watermark, duplicate animals")
+        self.assertNotIn("negative_prompt", pipe.calls[0])
 
-    def test_the_server_may_retune_guidance_without_a_worker_release(self):
-        """The reason guidance is read from the payload at all."""
+    def test_the_payload_cannot_retune_turbo_guidance(self):
         pipe = FakePipeline()
         renderer_with(pipe).render(
             {"prompt": "x", "seed": 1, "operation": "master", "guidance": 6.5})
-        self.assertEqual(pipe.calls[0]["guidance_scale"], 6.5)
+        self.assertEqual(pipe.calls[0]["guidance_scale"], 0.0)
 
     def test_a_nonsensical_scale_falls_back_rather_than_wasting_a_render(self):
         # Below 1.0 the pipeline switches guidance off entirely, which is the
@@ -321,17 +283,16 @@ class GuidanceTests(unittest.TestCase):
             with self.subTest(asked=asked):
                 spec = render.operation_of(
                     {"operation": "master", "guidance": asked})
-                self.assertEqual(spec["guidance"], 4.0)
+                self.assertEqual(spec["guidance"], 0.0)
 
     def test_size_and_steps_are_still_pinned_against_the_payload(self):
         # These decide what a job costs, so they are not negotiable.
         spec = render.operation_of({"operation": "master", "steps": 4})
-        self.assertEqual(spec["steps"], 50)
+        self.assertEqual(spec["steps"], 9)
         with self.assertRaises(ValueError):
             render.operation_of({"operation": "master", "width": 2048, "height": 2048})
 
-    def test_the_checkpoint_is_the_base_one_and_is_pinned(self):
-        self.assertIn("base", render.MODEL,
-                      "the distilled checkpoint ignores guidance entirely")
+    def test_the_checkpoint_is_z_image_turbo_and_is_pinned(self):
+        self.assertEqual(render.MODEL, "Tongyi-MAI/Z-Image-Turbo")
         self.assertTrue(render.REVISION,
                         "an unpinned repo means two machines can run different weights")

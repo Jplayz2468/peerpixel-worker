@@ -31,7 +31,7 @@ from .version import RUNTIME_VERSION
 #: bytes over the socket. It adds explicit worker consent for private jobs and
 #: hides job content in the official worker interface. Older installs stay
 #: connected but ineligible until they update.
-PROTOCOL_VERSION = 14
+PROTOCOL_VERSION = 15
 
 HEARTBEAT_SECONDS = 25
 RECONNECT_MIN = 2
@@ -363,7 +363,7 @@ def _do_job(link, job: dict, renderer, session: Session, link_ref, sent_at, prom
         with console.Live(bar, heading=heading,
                           footer=hardware.line if hardware else None):
             if getattr(renderer, "pipe", None) is None:
-                reporter.begin("loading_flux")
+                reporter.begin("loading_model")
                 bar.begin("load")
                 renderer.warm()
 
@@ -542,7 +542,7 @@ def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
     if enhancer is not None:
         enhancer.unload()
         renderer._enhancer = None
-    milestone("loading_flux", .01)
+    milestone("loading_model", .01)
     source = None
     if task.get("sourceUrl"):
         source = api.source_image(task["sourceUrl"], device_id=device_id,
@@ -585,7 +585,7 @@ def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
                 "progress": min(1.0, (offset + done) / total_steps)}))
         decode_lease = [None]
         def phase(name):
-            mapped = name if name in {"encoding_prompt", "rendering", "decoding"} else "loading_flux"
+            mapped = name if name in {"encoding_prompt", "rendering", "decoding"} else "loading_model"
             milestone(mapped, min(.9, completed_steps / total_steps + .01))
             if mapped == "decoding" and decode_lease[0] is None:
                 decode_lease[0] = phase_lease(

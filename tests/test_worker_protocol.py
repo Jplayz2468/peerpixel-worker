@@ -83,6 +83,7 @@ SIZES_BY_VERSION = {
     13: {"master": (1024, 50), "probe": (128, 50)},
     # Source-conditioned variation and masked inpainting on capable CUDA workers.
     14: {"master": (1024, 50), "probe": (128, 50)},
+    15: {"master": (1024, 9), "probe": (128, 9)},
 }
 
 
