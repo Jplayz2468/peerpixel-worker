@@ -399,8 +399,10 @@ class PromptEnhancer:
             self._adapter_manifest = manifest
         path = self.model_path or model_hub.ensure("qwen3-1.7b")
         self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
-        # CUDA workers release FLUX before enhancement, so the small language
-        # model can use the GPU without competing for VRAM. Non-CUDA workers
+        # CUDA workers release the image pipeline before enhancement, so the
+        # small language model can use the GPU without competing for VRAM. The
+        # enhance stage enforces that; this comment used to describe it as if it
+        # happened by itself, and it did not. Non-CUDA workers
         # retain the portable CPU path (especially important on unified-memory
         # Apple systems, where sharing with FLUX can make decode swap).
         device_map = "cuda" if torch.cuda.is_available() else "cpu"

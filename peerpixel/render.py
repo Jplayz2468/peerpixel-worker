@@ -193,6 +193,12 @@ def nvidia_processes() -> list[tuple[str, int, int]]:
 MINIMUM_CUDA_HEADROOM = 2 * 1024 ** 3
 
 
+def has_cuda_headroom() -> bool:
+    """Whether the card has room for another model beside what is loaded."""
+    free, total = nvidia_memory()
+    return not total or free >= MINIMUM_CUDA_HEADROOM
+
+
 def reclaim_leftovers(free: int) -> int:
     """End our own abandoned GPU processes and report the memory back.
 

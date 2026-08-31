@@ -518,6 +518,15 @@ def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
         return PhaseLease(phase, timeout, pulse)
     if stage == "enhance":
         milestone("loading_prompt_model", .02)
+        # Enhancement needs room on the card for a 1.7B model. A render gives
+        # its pipeline back when it ends, so normally there is room and touching
+        # it here would only add a synchronous collection to the front of every
+        # enhancement, which users saw as a long pause at 2%. When something did
+        # leave a pipeline resident, that pipeline is most of the card and every
+        # enhancement here would fail; take the pause over the failure.
+        from .render import has_cuda_headroom
+        if not has_cuda_headroom():
+            renderer.unload()
         from .prompt_enhancer import PromptEnhancer
         enhancer = getattr(renderer, "_enhancer", None) or PromptEnhancer(
             adapter_path=config.read().get("promptAdapter"))
@@ -621,10 +630,10 @@ def _discord_task_inner(link, task: dict, renderer, device_id: str) -> None:
         for attempt in range(5):
             try:
                 api.submit_discord_result(task, device_id, rendered, grid)
-                # Release FLUX after the result is safely delivered. Doing this at
-                # the start of the next enhancement made users wait at 2% while a
-                # large CUDA pipeline was synchronously collected.
-                renderer.unload()
+                # The pipeline is released once this task ends, which is after
+                # the result is safely delivered. Doing it at the start of the
+                # next enhancement instead made users wait at 2% while a large
+                # CUDA pipeline was synchronously collected.
                 return
             except api.ApiError as error:
                 last_error = error
@@ -649,6 +658,13 @@ def _discord_task(link, task: dict, renderer, device_id: str) -> None:
     try:
         return _discord_task_inner(link, task, renderer, device_id)
     finally:
+        # A render releases its pipeline once the result is safely delivered.
+        # A render that failed never reached that line, and what it leaves
+        # behind is most of the card: every later enhancement on this machine
+        # then fails to find room for a much smaller model, and keeps failing
+        # until somebody restarts the worker. Release on every ending instead.
+        if task.get("stage") == "render":
+            renderer.unload()
         memory = cleanup_after_task(renderer)
         emit_control({"type": "idle", "render_completed": task.get("stage") == "render",
                       "rss_bytes": memory.rss_bytes, "swap_bytes": memory.swap_bytes,

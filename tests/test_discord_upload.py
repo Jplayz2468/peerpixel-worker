@@ -27,6 +27,61 @@ class DiscordUploadTests(unittest.TestCase):
         renderer.render.return_value = b"jpeg"
         return renderer
 
+    def enhance(self, renderer, enhancer_type):
+        enhancer_type.return_value.enhance_pairs_batch.return_value = [
+            {"prompt": str(index), "negativePrompt": "bad"} for index in range(4)
+        ]
+        enhancer_type.return_value.provenance = "bootstrap-0002"
+        worker._discord_task(Link(), {"id": "job", "stage": "enhance", "count": 4,
+            "mode": "broad", "assignmentToken": "lease", "prompt": "fox"},
+            renderer, "device")
+
+    @mock.patch("peerpixel.render.has_cuda_headroom", return_value=False)
+    @mock.patch("peerpixel.prompt_enhancer.PromptEnhancer")
+    @mock.patch("peerpixel.config.read", return_value={})
+    def test_a_full_card_gives_the_pipeline_back_rather_than_failing_to_enhance(
+            self, _read, enhancer_type, _headroom):
+        """A resident pipeline is most of the card, and enhancement needs room.
+
+        Without this an enhancement fails with an out-of-memory error on a
+        machine that was rendering happily a moment earlier, and keeps failing
+        until somebody restarts the worker.
+        """
+        renderer = self.renderer()
+        renderer._enhancer = None
+
+        self.enhance(renderer, enhancer_type)
+
+        renderer.unload.assert_called_once_with()
+        # Releasing the pipeline must not throw away the enhancer with it.
+        self.assertFalse(enhancer_type.return_value.unload.called)
+
+    @mock.patch("peerpixel.render.has_cuda_headroom", return_value=True)
+    @mock.patch("peerpixel.prompt_enhancer.PromptEnhancer")
+    @mock.patch("peerpixel.config.read", return_value={})
+    def test_a_card_with_room_is_left_alone_so_enhancement_does_not_stall(
+            self, _read, enhancer_type, _headroom):
+        """Collecting a large pipeline is slow and users saw it as a pause at 2%."""
+        renderer = self.renderer()
+        renderer._enhancer = None
+
+        self.enhance(renderer, enhancer_type)
+
+        renderer.unload.assert_not_called()
+
+    def test_a_failed_render_still_gives_its_pipeline_back(self):
+        """The success path releases after upload; a failure never reaches it.
+
+        A pipeline left resident wedges every later enhancement on this machine.
+        """
+        renderer = self.renderer()
+        renderer.render.side_effect = RuntimeError("CUDA out of memory")
+
+        with self.assertRaises(RuntimeError):
+            worker._discord_task(Link(), self.task(), renderer, "device")
+
+        renderer.unload.assert_called_once_with()
+
     @mock.patch("peerpixel.prompt_enhancer.PromptEnhancer")
     @mock.patch("peerpixel.config.read", return_value={"promptAdapter": "/models/bootstrap"})
     def test_enhancement_injects_the_machine_local_adapter(self, _read, enhancer_type):
