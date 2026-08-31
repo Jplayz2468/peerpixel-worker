@@ -193,6 +193,29 @@ def nvidia_processes() -> list[tuple[str, int, int]]:
 MINIMUM_CUDA_HEADROOM = 2 * 1024 ** 3
 
 
+def reclaim_leftovers(free: int) -> int:
+    """End our own abandoned GPU processes and report the memory back.
+
+    Only reached when the card is already too full to work with, so the cost of
+    looking is paid exactly when it buys something.
+    """
+    try:
+        import psutil
+
+        from . import gpu_reclaim
+
+        verdicts = gpu_reclaim.reclaim(nvidia_processes(), psutil_module=psutil)
+    except Exception:  # noqa: BLE001 - never block a render on the tidy-up
+        return free
+    for line in gpu_reclaim.describe(verdicts):
+        print(line)
+    if not any(record["reclaim"] for record in verdicts):
+        return free
+    time.sleep(1)
+    reclaimed, _ = nvidia_memory()
+    return max(free, reclaimed)
+
+
 def _display_memory(size: int) -> str:
     if size >= 1024 ** 3:
         return f"{size / 1024 ** 3:.1f} GB"
@@ -603,6 +626,8 @@ class Renderer:
         if device == "cuda":
             free, current_total = nvidia_memory()
             total = total or current_total
+            if free < MINIMUM_CUDA_HEADROOM:
+                free = reclaim_leftovers(free)
             require_cuda_headroom(free, total)
         _quieten()
         started = time.time()
