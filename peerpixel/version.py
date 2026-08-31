@@ -1,4 +1,4 @@
 """Worker release identity shared by HTTP and render protocol messages."""
 
-VERSION = "1.15.3"
+VERSION = "1.15.4"
 RUNTIME_VERSION = f"peerpixel-worker/{VERSION}"
