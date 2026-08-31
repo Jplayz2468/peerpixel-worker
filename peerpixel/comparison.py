@@ -133,6 +133,7 @@ def run_comparison(client: ComparisonClient, lease: dict, renderer) -> bool:
         if hashlib.sha256(benchmark_body).hexdigest() != lease["benchmarkDigest"]:
             raise ValueError("benchmark_digest_mismatch")
         benchmark = json.loads(benchmark_body)
+        renderer.unload()
         comparison_path = _extract_adapter(client.adapter(lease, "comparison"), root / "comparison",
                                             lease["comparisonAdapter"]["artifactDigest"])
         current_path = _extract_adapter(client.adapter(lease, "current"), root / "current",
@@ -148,7 +149,7 @@ def run_comparison(client: ComparisonClient, lease: dict, renderer) -> bool:
         for side, prompts in enumerate((comparison_prompts, current_prompts)):
             for prompt, item in zip(prompts, benchmark["prompts"]):
                 rendered[side].append(renderer.render({"operation": "grid", "prompt": prompt,
-                    "seed": int(item["diffusionSeed"]), "width": 512, "height": 512, "steps": 16}))
+                    "seed": int(item["diffusionSeed"]), **benchmark["render"]}))
                 done += 1; client.progress(lease, "rendering", done, 40)
         pairs = []
         outputs = []
@@ -170,4 +171,8 @@ def run_comparison(client: ComparisonClient, lease: dict, renderer) -> bool:
         except Exception: pass
         return False
     finally:
+        try:
+            renderer.unload()
+        except Exception:
+            pass
         shutil.rmtree(root, ignore_errors=True)

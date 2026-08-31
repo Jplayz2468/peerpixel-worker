@@ -196,7 +196,7 @@ def _preference_rows(rows, *, allow_empty: bool) -> list[dict]:
             weight = float(row.get("weight"))
         except (TypeError, ValueError):
             raise TrainingError("snapshot_weight_invalid") from None
-        if weight not in (0.5, 1.0):
+        if not math.isfinite(weight) or weight <= 0:
             raise TrainingError("snapshot_weight_invalid")
         normalized.append({**row, "prompt": row["prompt"].strip(),
                            "chosen": row["chosen"].strip(),
@@ -582,6 +582,7 @@ class TrainerCapability:
                  staging_root: Path | None = None,
                  train_backend: Callable | None = None,
                  on_promoted: Callable[[Path, Mapping], None] | None = None,
+                 on_parent_selected: Callable[[Path], None] | None = None,
                  on_training_start: Callable[[], None] | None = None,
                  on_training_end: Callable[[], None] | None = None,
                  now: Callable[[], float] | None = None):
@@ -593,6 +594,7 @@ class TrainerCapability:
         self.staging_root = Path(staging_root) if staging_root is not None else None
         self.train_backend = train_backend
         self.on_promoted = on_promoted
+        self.on_parent_selected = on_parent_selected
         self.on_training_start = on_training_start
         self.on_training_end = on_training_end
         self.now = now or __import__("time").time
@@ -614,6 +616,26 @@ class TrainerCapability:
         if value is None:
             raise TrainingError("active_adapter_unavailable")
         return Path(value)
+
+    def _parent_path(self, lease: TrainingLease) -> Path:
+        active = self._active_path().resolve()
+        try:
+            if load_manifest(active / "manifest.json")["version"] == lease.parent_version:
+                return active
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        if self.staging_root is None:
+            raise TrainingError("trainer_staging_unavailable")
+        retained = (self.staging_root.resolve() / lease.parent_version).resolve()
+        try:
+            manifest = load_manifest(retained / "manifest.json")
+        except (OSError, ValueError, KeyError, TypeError):
+            raise TrainingError("parent_adapter_mismatch") from None
+        if manifest["version"] != lease.parent_version:
+            raise TrainingError("parent_adapter_mismatch")
+        if self.on_parent_selected is not None:
+            self.on_parent_selected(retained)
+        return retained
 
     def _failure(self, lease: TrainingLease, reason: str) -> None:
         report = TrainingReport.failed(lease.run_id, reason)
@@ -644,7 +666,7 @@ class TrainerCapability:
                 raise TrainingError("trainer_staging_unavailable")
             body = self.client.download_snapshot(lease)
             lease = lease.bind_local(
-                body, active_adapter=self._active_path(),
+                body, active_adapter=self._parent_path(lease),
                 staging_root=self.staging_root,
             )
             if self.on_training_start is not None:

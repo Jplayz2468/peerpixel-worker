@@ -31,6 +31,25 @@ def active_adapter(root: Path) -> Path:
     return adapter
 
 
+def preference_adapter(root: Path, version: str) -> Path:
+    adapter = root / "staged" / version
+    adapter.mkdir(parents=True)
+    (adapter / "adapter_model.safetensors").write_bytes(version.encode())
+    write_manifest(adapter, {
+        "schemaVersion": 1,
+        "version": version,
+        "kind": "preference",
+        "baseModel": "Qwen/Qwen3-1.7B",
+        "parentVersion": "bootstrap-0001",
+        "dataset": {},
+        "training": {},
+        "evaluation": {"passed": True},
+        "createdAt": "2026-08-29T00:00:00Z",
+        "complete": True,
+    })
+    return adapter
+
+
 def snapshot() -> bytes:
     return json.dumps({
       "version": "preference-snapshot-v1",
@@ -45,7 +64,7 @@ def snapshot() -> bytes:
       ],
       "replay": [
         {"prompt": "owl", "chosen": "A barn owl above a moonlit field.",
-         "rejected": "An owl.", "weight": 0.5, "eventId": "event-replay"},
+         "rejected": "An owl.", "weight": 0.125, "eventId": "event-replay"},
       ],
     }, sort_keys=True, separators=(",", ":")).encode()
 
@@ -93,6 +112,39 @@ class FakeTrainingClient:
 
 
 class TrainerLifecycleTests(unittest.TestCase):
+    def test_rollback_lease_selects_retained_parent_before_training(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            stale = preference_adapter(root, "preference-newer")
+            requested = preference_adapter(root, "preference-rollback")
+            body = snapshot()
+            payload = {
+                **lease_payload(body),
+                "parentVersion": "preference-rollback",
+            }
+            selected = []
+            trained_from = []
+
+            def backend(lease, _rows, _evaluation, output_dir):
+                trained_from.append(lease.active_adapter)
+                (Path(output_dir) / "adapter_model.safetensors").write_bytes(b"candidate")
+                return {"trainLoss": 0.2, "steps": 1}
+
+            capability = TrainerCapability(
+                FakeTrainingClient(payload, body),
+                device_id="owner-device",
+                enabled=True,
+                active_adapter=stale,
+                staging_root=root / "staged",
+                train_backend=backend,
+                on_parent_selected=lambda path: selected.append(path),
+                now=lambda: 1_000.0,
+            )
+
+            self.assertTrue(capability.poll_when_idle())
+            self.assertEqual(trained_from, [requested.resolve()])
+            self.assertEqual(selected, [requested.resolve()])
+
     def test_retry_replaces_only_an_incomplete_staging_directory(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
